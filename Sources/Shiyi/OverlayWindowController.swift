@@ -60,11 +60,7 @@ final class OverlayWindowController: NSObject {
         configure(operationPanel)
         panel.title = "拾译 · 常驻译文"
         panel.ignoresMouseEvents = true
-        panel.contentViewController = NSHostingController(rootView:
-            TranslationCardView(store: store).background {
-                if store.isOverlayVisible { SystemTranslationHost(store: store).accessibilityHidden(true) }
-            }
-        )
+        panel.contentViewController = NSHostingController(rootView: OverlayContentView(store: store))
         operationPanel.title = "拾译 · 译文操作点"
         operationPanel.level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
         operationPanel.ignoresMouseEvents = false
@@ -208,4 +204,19 @@ final class OverlayWindowController: NSObject {
     @objc private func retry() { store.retry() }
     @objc private func scrollUp() { store.scrollOverlay(by: -1) }
     @objc private func scrollDown() { store.scrollOverlay(by: 1) }
+}
+
+/// Observe visibility at the hosting root: observing only the card does not
+/// invalidate a background closure created while the overlay was hidden.
+private struct OverlayContentView: View {
+    @ObservedObject var store: AppStore
+
+    var body: some View {
+        TranslationCardView(store: store)
+            .background {
+                if store.isOverlayVisible {
+                    SystemTranslationHost(store: store).accessibilityHidden(true)
+                }
+            }
+    }
 }
