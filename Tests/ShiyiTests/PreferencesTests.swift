@@ -53,6 +53,30 @@ final class PreferencesTests: XCTestCase {
     }
 
     @MainActor
+    func testOverlaySettingsPersistAndPositionResetDoesNotChangeOpacity() throws {
+        let suite = "ShiyiTests.overlay.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let keys = MemoryKeychain("")
+        let preferences = Preferences(defaults: defaults, keychain: keys)
+        preferences.overlayOpacity = 0.4
+        preferences.overlayHorizontal = 0.1
+        preferences.overlayVertical = 0.8
+        preferences.overlayScreenID = "external-screen"
+        preferences.overlayShortcut = .controlOptionT
+        let restored = Preferences(defaults: defaults, keychain: keys)
+        XCTAssertEqual(restored.overlayOpacity, 0.4)
+        XCTAssertEqual(restored.overlayHorizontal, 0.1)
+        XCTAssertEqual(restored.overlayVertical, 0.8)
+        XCTAssertEqual(restored.overlayScreenID, "external-screen")
+        XCTAssertEqual(restored.overlayShortcut, .controlOptionT)
+        restored.resetOverlayPosition()
+        XCTAssertEqual(restored.overlayScreenID, "main")
+        XCTAssertEqual(restored.overlayOpacity, 0.4)
+        XCTAssertEqual(restored.overlayShortcut, .controlOptionT)
+    }
+
+    @MainActor
     func testKeychainFailureIsReportedAndDoesNotPersistSecretElsewhere() async throws {
         let suite = "ShiyiTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

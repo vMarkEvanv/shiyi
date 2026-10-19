@@ -7,7 +7,7 @@ Windows 应用代码、项目文件及平台构建脚本后续放在此目录，
 接入时需要实现：
 
 - 通过 Windows UI Automation 获取选区及有限上下文，提供快捷键取词和手动粘贴。
-- 托盘入口、自动触发、可固定的翻译浮窗及应用排除。
+- 托盘入口、快捷键唤出后常驻置顶的翻译浮窗、默认鼠标穿透及固定操作点；所有设置集中在主窗口，行为见[数据与浮窗约定](../../docs/translation-protocol.md)。
 - 使用 Windows 凭据存储保护 API Key。
 - 遵循 [翻译数据约定](../../docs/translation-protocol.md)，对齐 AI 模式的输入、输出及隐私设置。
 - 增加 Windows CI 和独立的 Release 安装包；不修改 macOS 安装包的文件名或架构标识。

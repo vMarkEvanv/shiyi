@@ -71,14 +71,16 @@ final class AppStoreLifecycleTests: XCTestCase {
     func testDismissInvalidatesInFlightSystemTranslation() {
         let (store, defaults, name) = makeStore()
         defer { defaults.removePersistentDomain(forName: name) }
+        store.showOverlay()
         store.translate(selection("token"))
         let jobID = store.job!.id
-        store.isPinned = true
+        store.toggleOverlayExpansion()
         store.dismiss()
         store.complete(TranslationOutput(translation: "late", explanation: "", alternatives: [], detectedScene: ""), jobID: jobID)
         XCTAssertNil(store.job)
         XCTAssertEqual(store.phase, .idle)
-        XCTAssertFalse(store.isPinned)
+        XCTAssertFalse(store.isOverlayVisible)
+        XCTAssertFalse(store.isOverlayExpanded)
     }
 
     @MainActor
@@ -114,6 +116,59 @@ final class AppStoreLifecycleTests: XCTestCase {
         }
         XCTAssertEqual(output.translation, "token")
         XCTAssertEqual(output.detectedScene, "无需翻译")
+    }
+
+    @MainActor
+    func testTranslationsCannotSummonHiddenOverlay() {
+        let (store, defaults, name) = makeStore()
+        defer { defaults.removePersistentDomain(forName: name) }
+        var showCount = 0
+        store.onShowPanel = { showCount += 1 }
+        store.translate(selection("token"))
+        XCTAssertFalse(store.isOverlayVisible)
+        XCTAssertEqual(showCount, 0)
+        store.captureFailed("No text")
+        XCTAssertFalse(store.isOverlayVisible)
+        XCTAssertEqual(showCount, 0)
+        store.showOverlay()
+        XCTAssertTrue(store.isOverlayVisible)
+        XCTAssertEqual(showCount, 1)
+    }
+
+    @MainActor
+    func testExpandedOverlayContinuesUpdatingAndCollapseDoesNotCancel() {
+        let (store, defaults, name) = makeStore()
+        defer { defaults.removePersistentDomain(forName: name) }
+        store.showOverlay()
+        store.toggleOverlayExpansion()
+        store.translate(selection("new selection"))
+        let id = store.job!.id
+        store.collapseOverlay()
+        XCTAssertTrue(store.isOverlayVisible)
+        XCTAssertFalse(store.isOverlayExpanded)
+        XCTAssertEqual(store.job?.id, id)
+        store.complete(TranslationOutput(translation: "更新译文", explanation: "", alternatives: [], detectedScene: ""), jobID: id)
+        XCTAssertTrue(store.isOverlayVisible)
+        guard case .finished(let output) = store.phase else { return XCTFail("Translation should finish while collapsed") }
+        XCTAssertEqual(output.translation, "更新译文")
+    }
+
+    @MainActor
+    func testSettingChangesAndScrollingDoNotDismissOverlay() {
+        let (store, defaults, name) = makeStore()
+        defer { defaults.removePersistentDomain(forName: name) }
+        store.showOverlay()
+        store.toggleOverlayExpansion()
+        store.translate(selection(String(repeating: "word ", count: 100)))
+        store.complete(TranslationOutput(translation: String(repeating: "译文", count: 300), explanation: "", alternatives: [], detectedScene: ""), jobID: store.job!.id)
+        store.scrollOverlay(by: 1000)
+        XCTAssertEqual(store.overlayScrollIndex, store.overlayBlocks.count - 1)
+        store.scrollOverlay(by: -1000)
+        XCTAssertEqual(store.overlayScrollIndex, 0)
+        store.invalidateTranslation()
+        XCTAssertTrue(store.isOverlayVisible)
+        XCTAssertTrue(store.isOverlayExpanded)
+        XCTAssertNil(store.job)
     }
 
     @MainActor

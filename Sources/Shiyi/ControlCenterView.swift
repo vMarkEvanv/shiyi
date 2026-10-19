@@ -38,6 +38,9 @@ struct ControlCenterView: View {
         .background(ShiyiTheme.canvas)
         .foregroundStyle(ShiyiTheme.ink)
         .tint(ShiyiTheme.accent)
+        .background {
+            if !store.isOverlayVisible { SystemTranslationHost(store: store).accessibilityHidden(true) }
+        }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ShiyiOpenPreferences"))) { _ in
             page = .preferences
         }
@@ -101,7 +104,7 @@ struct ControlCenterView: View {
             VStack(alignment: .leading, spacing: 7) {
                 Text(page == .reading ? "读懂眼前的每一句。" : "按你的习惯，轻轻调整。")
                     .font(.system(size: 25, weight: .semibold))
-                Text(page == .reading ? "选中文字，拾译会在旁边给出翻译。" : "翻译方式、阅读场景与隐私偏好。")
+                Text(page == .reading ? "按快捷键唤出浮窗，划词后在固定位置更新译文。" : "浮窗、翻译方式、阅读场景与隐私偏好。")
                     .font(.system(size: 12))
                     .foregroundStyle(ShiyiTheme.muted)
             }
@@ -117,6 +120,7 @@ struct ControlCenterView: View {
 
     @ViewBuilder private var readingPage: some View {
         if !store.permissionGranted { permissionCard }
+        overlayStatusCard
         card {
             VStack(alignment: .leading, spacing: 15) {
                 HStack {
@@ -166,7 +170,7 @@ struct ControlCenterView: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text("把注意力留在阅读上")
                     .font(.system(size: 12, weight: .medium))
-                Text("在其他应用中选中文字，松开鼠标稍候片刻。翻译卡片可复制、固定，或按 Esc 收起。")
+                Text("按 \(preferences.overlayShortcut.title) 唤出浮窗后再划词。译文区可穿透，右上角操作点可展开；按 Esc 只收起内容，不关闭浮窗。")
                     .font(.system(size: 11))
                     .lineSpacing(3)
                     .foregroundStyle(ShiyiTheme.muted)
@@ -244,13 +248,14 @@ struct ControlCenterView: View {
     }
 
     @ViewBuilder private var preferencesPage: some View {
+        overlaySettingsCard
         card {
             VStack(alignment: .leading, spacing: 17) {
                 sectionTitle("阅读方式", symbol: "cursorarrow.rays")
                 Toggle(isOn: $preferences.autoTranslate) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("选中文字后自动翻译").font(.system(size: 12, weight: .medium))
-                        Text("适用于支持辅助功能取词的应用。")
+                        Text("浮窗唤出后生效；隐藏浮窗时暂停自动取词。")
                             .font(.system(size: 10)).foregroundStyle(ShiyiTheme.muted)
                     }
                 }
@@ -310,6 +315,81 @@ struct ControlCenterView: View {
             }
         }
         permissionCard
+    }
+
+    private var overlayStatusCard: some View {
+        card {
+            HStack(spacing: 12) {
+                Image(systemName: "rectangle.on.rectangle").foregroundStyle(ShiyiTheme.accent)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(store.isOverlayVisible ? "浮窗已常驻置顶" : "按 \(preferences.overlayShortcut.title) 唤出浮窗")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text("透明度、位置和快捷键都在偏好设置中调整。")
+                        .font(.system(size: 10)).foregroundStyle(ShiyiTheme.muted)
+                }
+                Spacer()
+                Button(store.isOverlayVisible ? "隐藏浮窗" : "显示浮窗") {
+                    if store.isOverlayVisible { store.dismiss() } else { store.showOverlay() }
+                }
+                .controlSize(.small)
+            }
+        }
+    }
+
+    private var overlaySettingsCard: some View {
+        card {
+            VStack(alignment: .leading, spacing: 16) {
+                sectionTitle("常驻浮窗", symbol: "rectangle.on.rectangle")
+                HStack {
+                    Text("唤出快捷键").font(.system(size: 12))
+                    Spacer()
+                    Picker("唤出快捷键", selection: $preferences.overlayShortcut) {
+                        ForEach(OverlayShortcut.allCases) { shortcut in Text(shortcut.title).tag(shortcut) }
+                    }
+                    .labelsHidden().frame(width: 150)
+                }
+                if let error = store.shortcutError {
+                    Text(error).font(.system(size: 11)).foregroundStyle(.orange)
+                }
+                HStack {
+                    Text("透明度").font(.system(size: 12))
+                    Slider(value: Binding(get: { 1 - preferences.overlayOpacity }, set: { preferences.overlayOpacity = 1 - $0 }), in: 0...0.8)
+                        .accessibilityLabel("浮窗透明度")
+                    Text("\(Int(((1 - preferences.overlayOpacity) * 100).rounded()))%")
+                        .font(.system(size: 11, design: .monospaced)).frame(width: 38, alignment: .trailing)
+                }
+                HStack {
+                    Text("显示屏幕").font(.system(size: 12))
+                    Spacer()
+                    Picker("显示屏幕", selection: $preferences.overlayScreenID) {
+                        ForEach(store.availableDisplays) { display in Text(display.title).tag(display.id) }
+                    }
+                    .labelsHidden().frame(width: 230)
+                }
+                HStack {
+                    Text("水平位置").font(.system(size: 12)).frame(width: 52)
+                    Text("左").font(.system(size: 10)).foregroundStyle(ShiyiTheme.muted)
+                    Slider(value: $preferences.overlayHorizontal, in: 0...1).accessibilityLabel("浮窗水平位置")
+                    Text("右").font(.system(size: 10)).foregroundStyle(ShiyiTheme.muted)
+                }
+                HStack {
+                    Text("垂直位置").font(.system(size: 12)).frame(width: 52)
+                    Text("上").font(.system(size: 10)).foregroundStyle(ShiyiTheme.muted)
+                    Slider(value: $preferences.overlayVertical, in: 0...1).accessibilityLabel("浮窗垂直位置")
+                    Text("下").font(.system(size: 10)).foregroundStyle(ShiyiTheme.muted)
+                }
+                HStack {
+                    Button("恢复默认位置") { preferences.resetOverlayPosition() }.controlSize(.small)
+                    Spacer()
+                    Button(store.isOverlayVisible ? "隐藏浮窗" : "显示浮窗") {
+                        if store.isOverlayVisible { store.dismiss() } else { store.showOverlay() }
+                    }
+                    .controlSize(.small)
+                }
+                Text("浮窗默认鼠标穿透，右上角操作点始终可点击。左键展开或收起，右键复制或重试，在操作点上滚动可浏览长译文。展开时操作点不移动，切换应用不会关闭浮窗。")
+                    .font(.system(size: 10)).lineSpacing(3).foregroundStyle(ShiyiTheme.muted)
+            }
+        }
     }
 
     private var contextualSettings: some View {

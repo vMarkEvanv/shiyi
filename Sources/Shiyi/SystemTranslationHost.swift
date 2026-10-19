@@ -7,7 +7,7 @@ struct SystemTranslationHost: View {
 
     var body: some View {
         Group {
-            if let job = store.job, job.engine == .system, job.source != job.target {
+            if let job = store.job, store.phase == .loading, job.engine == .system, job.source != job.target {
                 SystemTranslationTaskView(store: store, job: job)
                     .id(job.id)
             }

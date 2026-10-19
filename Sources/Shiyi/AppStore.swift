@@ -9,10 +9,16 @@ final class AppStore: ObservableObject {
     @Published var phase: TranslationPhase = .idle
     @Published var job: TranslationJob?
     @Published var permissionGranted = AXIsProcessTrusted()
-    @Published var isPinned = false
+    @Published private(set) var isOverlayVisible = false
+    @Published private(set) var isOverlayExpanded = false
+    @Published private(set) var overlayScrollIndex = 0
+    @Published var overlayWidth: CGFloat = OverlayLayout.width
+    @Published var overlayHeight: CGFloat = OverlayLayout.compactHeight
+    @Published var availableDisplays = [OverlayDisplay(id: "main", title: "主屏幕")]
+    @Published var shortcutError: String?
     @Published var manualText = ""
-    private(set) var isPreparingSystemLanguages = false
-    var onShowPanel: ((CGPoint) -> Void)?
+    @Published private(set) var isPreparingSystemLanguages = false
+    var onShowPanel: (() -> Void)?
     var onDismissPanel: (() -> Void)?
     var onOpenSettings: (() -> Void)?
     var onSystemDownloadNeeded: (() -> Void)?
@@ -27,7 +33,7 @@ final class AppStore: ObservableObject {
         let next = TranslationJob(selection: captured, source: preferences.source, target: preferences.target, engine: preferences.engine)
         job = next
         phase = .loading
-        onShowPanel?(captured.anchor)
+        overlayScrollIndex = 0
         if next.source == next.target {
             complete(TranslationOutput(translation: captured.text, explanation: "原文语言与目标语言相同，已保留原文。", alternatives: [], detectedScene: "无需翻译"), jobID: next.id)
             return
@@ -93,7 +99,53 @@ final class AppStore: ObservableObject {
         cancelCurrentJob()
         selection = nil
         phase = .failed(message)
-        onShowPanel?(NSEvent.mouseLocation)
+    }
+
+    func showOverlay() {
+        if !isOverlayVisible {
+            // Moving a system host between windows must not replay an old request.
+            if phase == .loading { cancelCurrentJob(); phase = .idle }
+            isOverlayVisible = true
+        }
+        onShowPanel?()
+    }
+
+    func toggleOverlayExpansion() {
+        guard isOverlayVisible else { return }
+        isOverlayExpanded.toggle()
+        overlayScrollIndex = 0
+    }
+
+    func collapseOverlay() {
+        isOverlayExpanded = false
+        overlayScrollIndex = 0
+    }
+
+    func invalidateTranslation() {
+        cancelCurrentJob()
+        selection = nil
+        phase = .idle
+        overlayScrollIndex = 0
+    }
+
+    var overlayDetailText: String {
+        guard case .finished(let output) = phase else {
+            if case .failed(let message) = phase { return message }
+            return phase == .loading ? "正在翻译…" : "在其他应用中选中文字，译文会更新在这里。"
+        }
+        var parts: [String] = []
+        if let selection { parts.append("原文\n" + selection.text) }
+        parts.append("译文\n" + output.translation)
+        if !output.explanation.isEmpty { parts.append("说明\n" + output.explanation) }
+        if !output.alternatives.isEmpty { parts.append("其他译法\n" + output.alternatives.joined(separator: "\n")) }
+        return parts.joined(separator: "\n\n")
+    }
+
+    var overlayBlocks: [String] { OverlayText.blocks(overlayDetailText) }
+
+    func scrollOverlay(by direction: Int) {
+        guard isOverlayExpanded else { return }
+        overlayScrollIndex = min(max(0, overlayScrollIndex + direction), max(0, overlayBlocks.count - 1))
     }
 
     func copyTranslation() {
@@ -104,7 +156,8 @@ final class AppStore: ObservableObject {
 
     func dismiss() {
         cancelCurrentJob()
-        isPinned = false
+        isOverlayVisible = false
+        collapseOverlay()
         if phase == .loading { phase = .idle }
         onDismissPanel?()
     }

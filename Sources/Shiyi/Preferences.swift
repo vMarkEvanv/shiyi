@@ -12,6 +12,11 @@ final class Preferences: ObservableObject {
     @Published var sendContext: Bool { didSet { defaults.set(sendContext, forKey: "sendContext") } }
     @Published var excludedBundleIDs: String { didSet { defaults.set(excludedBundleIDs, forKey: "excludedBundleIDs") } }
     @Published var scene: String { didSet { defaults.set(scene, forKey: "scene") } }
+    @Published var overlayOpacity: Double { didSet { defaults.set(OverlayLayout.opacity(overlayOpacity), forKey: "overlayOpacity") } }
+    @Published var overlayHorizontal: Double { didSet { defaults.set(OverlayLayout.unit(overlayHorizontal), forKey: "overlayHorizontal") } }
+    @Published var overlayVertical: Double { didSet { defaults.set(OverlayLayout.unit(overlayVertical), forKey: "overlayVertical") } }
+    @Published var overlayScreenID: String { didSet { defaults.set(overlayScreenID, forKey: "overlayScreenID") } }
+    @Published var overlayShortcut: OverlayShortcut { didSet { defaults.set(overlayShortcut.rawValue, forKey: "overlayShortcut") } }
     @Published var apiKey: String
     @Published private(set) var lastKeyError: String?
 
@@ -30,6 +35,11 @@ final class Preferences: ObservableObject {
         sendContext = defaults.object(forKey: "sendContext") as? Bool ?? true
         excludedBundleIDs = defaults.string(forKey: "excludedBundleIDs") ?? "com.apple.keychainaccess"
         scene = defaults.string(forKey: "scene") ?? "自动"
+        overlayOpacity = OverlayLayout.opacity(defaults.object(forKey: "overlayOpacity") as? Double ?? 0.85)
+        overlayHorizontal = OverlayLayout.unit(defaults.object(forKey: "overlayHorizontal") as? Double ?? 0.95)
+        overlayVertical = OverlayLayout.unit(defaults.object(forKey: "overlayVertical") as? Double ?? 0.12)
+        overlayScreenID = defaults.string(forKey: "overlayScreenID") ?? "main"
+        overlayShortcut = OverlayShortcut(rawValue: defaults.string(forKey: "overlayShortcut") ?? "") ?? .optionCommandT
         do {
             apiKey = try keychain.loadAPIKey()
         } catch {
@@ -42,6 +52,12 @@ final class Preferences: ObservableObject {
         let previousSource = source
         source = target
         target = previousSource
+    }
+
+    func resetOverlayPosition() {
+        overlayHorizontal = 0.95
+        overlayVertical = 0.12
+        overlayScreenID = "main"
     }
 
     func saveAPIKey() throws {

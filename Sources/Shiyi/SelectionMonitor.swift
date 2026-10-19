@@ -47,8 +47,8 @@ final class SelectionMonitor {
     func invalidate() { generation = UUID(); pending?.cancel(); pending = nil }
     func clearLastSelection() { lastSelection = nil }
 
-    func captureManually() {
-        schedule(manual: true, delay: 0.08)
+    func captureManually(reportFailure: Bool = true) {
+        schedule(manual: true, delay: 0.08, reportFailure: reportFailure)
     }
 
     private func handle(_ event: NSEvent) {
@@ -73,7 +73,7 @@ final class SelectionMonitor {
         }
     }
 
-    private func schedule(manual: Bool, delay: TimeInterval) {
+    private func schedule(manual: Bool, delay: TimeInterval, reportFailure: Bool = true) {
         invalidate()
         let token = generation
         pending = Task { [weak self] in
@@ -81,7 +81,7 @@ final class SelectionMonitor {
             guard !Task.isCancelled, let self, token == self.generation else { return }
             guard manual || (self.preferences.autoTranslate && !(self.shouldSkipAutomatic?() ?? false)) else { return }
             guard AXIsProcessTrusted() else {
-                if manual { self.onFailure?("请先在系统设置中允许拾译使用“辅助功能”，才能读取其他应用的选中文字。") }
+                if manual && reportFailure { self.onFailure?("请先在系统设置中允许拾译使用“辅助功能”，才能读取其他应用的选中文字。") }
                 return
             }
             self.rememberFrontApp()
@@ -91,7 +91,7 @@ final class SelectionMonitor {
                   app.processIdentifier != ProcessInfo.processInfo.processIdentifier, !app.isTerminated else { return }
             let bundleID = app.bundleIdentifier ?? ""
             guard !TextContext.excludedApps(from: self.preferences.excludedBundleIDs).contains(bundleID) else {
-                if manual { self.onFailure?("这个应用已被排除。你可以在偏好设置中将它移出排除列表。") }
+                if manual && reportFailure { self.onFailure?("这个应用已被排除。你可以在偏好设置中将它移出排除列表。") }
                 return
             }
             let includeContext = self.preferences.engine == .contextual && self.preferences.sendContext
@@ -104,6 +104,7 @@ final class SelectionMonitor {
                 }
             }
             guard !Task.isCancelled, token == self.generation else { return }
+            guard manual || (self.preferences.autoTranslate && !(self.shouldSkipAutomatic?() ?? false)) else { return }
             switch result {
             case .success(let selection):
                 if !manual, let last = self.lastSelection, last.text == selection.text,
@@ -113,7 +114,7 @@ final class SelectionMonitor {
                 self.onSelection?(selection)
             case .failure(let error):
                 self.lastSelection = nil
-                if manual { self.onFailure?(error.localizedDescription) }
+                if manual && reportFailure { self.onFailure?(error.localizedDescription) }
             }
         }
     }
