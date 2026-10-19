@@ -40,21 +40,52 @@ struct SelectionReader {
         AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.25)
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, 0.25)
-        guard let focus = element(app, kAXFocusedUIElementAttribute) else { throw SelectionReadError.noSelection }
-        var candidate: AXUIElement? = focus
-        for _ in 0..<6 {
+        let focus = element(app, kAXFocusedUIElementAttribute)
+        var candidate = focus
+        var ancestors: [AXUIElement] = []
+        for _ in 0..<12 {
             guard let current = candidate else { break }
             if string(current, kAXSubroleAttribute) == "AXSecureTextField" { throw SelectionReadError.secureField }
-            if let selected = string(current, kAXSelectedTextAttribute)?.trimmingCharacters(in: .whitespacesAndNewlines), !selected.isEmpty {
-                guard selected.count <= 5_000 else { throw SelectionReadError.tooLong }
-                let context = includeContext ? surroundingText(current) : ""
-                let title = includeContext ? element(app, kAXFocusedWindowAttribute).flatMap { string($0, kAXTitleAttribute) } ?? "" : ""
-                return CapturedSelection(text: selected, context: context, appName: appName, bundleID: bundleID,
-                                         documentTitle: String(title.prefix(250)), anchor: anchor)
-            }
+            ancestors.append(current)
             candidate = element(current, kAXParentAttribute)
         }
+        func capture(_ current: AXUIElement) throws -> CapturedSelection? {
+            guard string(current, kAXSubroleAttribute) != "AXSecureTextField" else { return nil }
+            guard let selected = selectedText(current)?.trimmingCharacters(in: .whitespacesAndNewlines), !selected.isEmpty else { return nil }
+            guard selected.count <= 5_000 else { throw SelectionReadError.tooLong }
+            let context = includeContext ? surroundingText(current) : ""
+            let title = includeContext ? element(app, kAXFocusedWindowAttribute).flatMap { string($0, kAXTitleAttribute) } ?? "" : ""
+            return CapturedSelection(text: selected, context: context, appName: appName, bundleID: bundleID,
+                                     documentTitle: String(title.prefix(250)), anchor: anchor)
+        }
+        for current in ancestors {
+            if let result = try capture(current) { return result }
+        }
+        // A browser's focused element may be its native container, while the
+        // document selection belongs to a descendant web area (including frames).
+        if BrowserAccessibility.isChromium(bundleID), let window = element(app, kAXFocusedWindowAttribute) {
+            let deadline = Date().addingTimeInterval(1)
+            var pending: [(AXUIElement, Int)] = [(window, 0)]
+            var visited = 0
+            while let (current, depth) = pending.popLast(), visited < 180, Date() < deadline {
+                visited += 1
+                if string(current, kAXSubroleAttribute) == "AXSecureTextField" { continue }
+                if string(current, kAXRoleAttribute) == "AXWebArea", let result = try capture(current) { return result }
+                guard depth < 16 else { continue }
+                let children = value(current, kAXChildrenAttribute) as? [AXUIElement] ?? []
+                pending.append(contentsOf: children.prefix(180 - visited).reversed().map { ($0, depth + 1) })
+            }
+        }
         throw SelectionReadError.noSelection
+    }
+
+    private func selectedText(_ source: AXUIElement) -> String? {
+        if let text = string(source, kAXSelectedTextAttribute), !text.isEmpty { return text }
+        guard let range = value(source, "AXSelectedTextMarkerRange") else { return nil }
+        var result: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(source, "AXStringForTextMarkerRange" as CFString,
+                                                         range, &result) == .success else { return nil }
+        return result as? String
     }
 
     private func value(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
@@ -94,5 +125,30 @@ struct SelectionReader {
             return String(TextContext.surroundingText(in: text, selection: NSRange(location: selectedRange.location, length: selectedRange.length)).prefix(6_200))
         }
         return ""
+    }
+}
+
+/// Chrome exposes web accessibility lazily. Request it once per running process;
+/// repeated enhanced-UI requests restart Chromium's activation delay.
+@MainActor
+final class BrowserAccessibility {
+    private var prepared: [pid_t: (launch: Date, ready: Date)] = [:]
+
+    nonisolated static func isChromium(_ bundleID: String) -> Bool {
+        bundleID == "com.google.Chrome" || bundleID.hasPrefix("com.google.Chrome.") ||
+        bundleID == "org.chromium.Chromium" || bundleID.hasPrefix("com.microsoft.edgemac") ||
+        bundleID.hasPrefix("com.brave.Browser") || bundleID == "com.vivaldi.Vivaldi" ||
+        bundleID == "company.thebrowser.Browser"
+    }
+
+    @discardableResult func prepare(_ app: NSRunningApplication) -> TimeInterval {
+        guard Self.isChromium(app.bundleIdentifier ?? ""), AXIsProcessTrusted() else { return 0 }
+        let pid = app.processIdentifier
+        if let entry = prepared[pid], entry.launch == (app.launchDate ?? Date.distantPast) { return max(0, entry.ready.timeIntervalSinceNow) }
+        let element = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(element, 0.25)
+        AXUIElementSetAttributeValue(element, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+        prepared[pid] = (app.launchDate ?? Date.distantPast, Date().addingTimeInterval(2.2))
+        return 2.2
     }
 }

@@ -10,6 +10,7 @@ final class SelectionMonitor {
     var shouldSkipAutomatic: (() -> Bool)?
     private let preferences: Preferences
     private let queue = DispatchQueue(label: "com.shiyi.selection", qos: .userInitiated)
+    private let browserAccessibility = BrowserAccessibility()
     private var monitors: [Any] = []
     private var pending: Task<Void, Never>?
     private var generation = UUID()
@@ -72,6 +73,7 @@ final class SelectionMonitor {
     private func rememberFrontApp() {
         if let app = NSWorkspace.shared.frontmostApplication, app.processIdentifier != ProcessInfo.processInfo.processIdentifier {
             lastExternalApp = app
+            browserAccessibility.prepare(app)
         }
     }
 
@@ -91,6 +93,11 @@ final class SelectionMonitor {
             guard manual || front?.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
             guard let app = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? self.lastExternalApp : front,
                   app.processIdentifier != ProcessInfo.processInfo.processIdentifier, !app.isTerminated else { return }
+            let browserDelay = self.browserAccessibility.prepare(app)
+            if browserDelay > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(browserDelay * 1_000_000_000))
+                guard !Task.isCancelled, token == self.generation else { return }
+            }
             let bundleID = app.bundleIdentifier ?? ""
             guard !TextContext.excludedApps(from: self.preferences.excludedBundleIDs).contains(bundleID) else {
                 if manual && reportFailure { self.onFailure?("这个应用已被排除。你可以在偏好设置中将它移出排除列表。") }
