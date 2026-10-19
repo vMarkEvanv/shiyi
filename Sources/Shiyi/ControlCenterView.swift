@@ -170,7 +170,7 @@ struct ControlCenterView: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text("把注意力留在阅读上")
                     .font(.system(size: 12, weight: .medium))
-                Text("按 \(preferences.overlayShortcut.title) 唤出浮窗后再划词。译文区可穿透，右上角操作点可展开；按 Esc 只收起内容，不关闭浮窗。")
+                Text("按 \(preferences.overlayShortcut.title) 唤出浮窗后再划词。译文区可穿透，右上角操作点可展开；再次按快捷键隐藏浮窗；按住操作点可拖动位置。")
                     .font(.system(size: 11))
                     .lineSpacing(3)
                     .foregroundStyle(ShiyiTheme.muted)
@@ -341,9 +341,9 @@ struct ControlCenterView: View {
             VStack(alignment: .leading, spacing: 16) {
                 sectionTitle("常驻浮窗", symbol: "rectangle.on.rectangle")
                 HStack {
-                    Text("唤出快捷键").font(.system(size: 12))
+                    Text("显示/隐藏快捷键").font(.system(size: 12))
                     Spacer()
-                    Picker("唤出快捷键", selection: $preferences.overlayShortcut) {
+                    Picker("显示/隐藏快捷键", selection: $preferences.overlayShortcut) {
                         ForEach(OverlayShortcut.allCases) { shortcut in Text(shortcut.title).tag(shortcut) }
                     }
                     .labelsHidden().frame(width: 150)
@@ -386,7 +386,7 @@ struct ControlCenterView: View {
                     }
                     .controlSize(.small)
                 }
-                Text("浮窗默认鼠标穿透，右上角操作点始终可点击。左键展开或收起，右键复制或重试，在操作点上滚动可浏览长译文。展开时操作点不移动，切换应用不会关闭浮窗。")
+                Text("浮窗默认鼠标穿透，右上角操作点始终可点击。左键展开或收起，按住拖动可改变位置，右键复制或重试，在操作点上滚动可浏览长译文。展开时操作点不移动，切换应用不会关闭浮窗。")
                     .font(.system(size: 10)).lineSpacing(3).foregroundStyle(ShiyiTheme.muted)
             }
         }

@@ -11,9 +11,29 @@ final class OverlayPanel: NSPanel {
 private final class OperationPointButton: NSButton {
     var contextMenuProvider: (() -> NSMenu)?
     var onScroll: ((Int) -> Void)?
+    var onDrag: ((CGPoint, CGPoint) -> Void)?
+    var onDragStart: (() -> Void)?
     private var lastScroll: TimeInterval = 0
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func menu(for event: NSEvent) -> NSMenu? { contextMenuProvider?() }
+    override func mouseDown(with event: NSEvent) {
+        onDragStart?()
+        let start = NSEvent.mouseLocation
+        var dragged = false
+        isHighlighted = true
+        defer { isHighlighted = false }
+        while let next = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+            let current = NSEvent.mouseLocation
+            if !dragged, hypot(current.x - start.x, current.y - start.y) >= 4 { dragged = true }
+            if dragged { onDrag?(start, current) }
+            if next.type == .leftMouseUp {
+                if !dragged, bounds.contains(convert(next.locationInWindow, from: nil)) {
+                    sendAction(action, to: target)
+                }
+                break
+            }
+        }
+    }
     override func scrollWheel(with event: NSEvent) {
         guard event.timestamp - lastScroll > 0.15, abs(event.scrollingDeltaY) > 0.1 else { return }
         lastScroll = event.timestamp
@@ -28,6 +48,8 @@ final class OverlayWindowController: NSObject {
     private let button = OperationPointButton()
     private let store: AppStore
     private var observers = Set<AnyCancellable>()
+    private var dragStart: CGPoint?
+    private var dragOrigin: CGPoint = .zero
 
     init(store: AppStore) {
         self.store = store
@@ -54,9 +76,11 @@ final class OverlayWindowController: NSObject {
         button.wantsLayer = true
         button.layer?.backgroundColor = NSColor(calibratedRed: 0.38, green: 0.38, blue: 0.80, alpha: 1).cgColor
         button.layer?.cornerRadius = 18
-        button.toolTip = "点击展开或收起；右键复制、重试；在此滚动浏览长译文"
+        button.toolTip = "点击展开或收起；拖动改变位置；右键复制、重试；滚动浏览长译文"
         button.contextMenuProvider = { [weak self] in self?.makeMenu() ?? NSMenu() }
         button.onScroll = { [weak store] direction in store?.scrollOverlay(by: direction) }
+        button.onDragStart = { [weak self] in self?.dragStart = nil }
+        button.onDrag = { [weak self] start, current in self?.moveOverlay(from: start, to: current) }
         operationPanel.contentView = button
 
         Publishers.CombineLatest4(store.preferences.$overlayOpacity, store.preferences.$overlayHorizontal,
@@ -136,6 +160,24 @@ final class OverlayWindowController: NSObject {
         operationPanel.alphaValue = 1
         button.image = NSImage(systemSymbolName: store.isOverlayExpanded ? "chevron.up" : "chevron.down", accessibilityDescription: nil)
         button.setAccessibilityLabel(store.isOverlayExpanded ? "收起译文" : "展开译文")
+    }
+
+    private func moveOverlay(from start: CGPoint, to current: CGPoint) {
+        if dragStart != start {
+            dragStart = start
+            dragOrigin = CGPoint(x: panel.frame.minX, y: panel.frame.maxY)
+        }
+        let screen = NSScreen.screens.first { $0.frame.contains(current) } ?? NSScreen.screens.first
+        guard let screen else { return }
+        let area = screen.visibleFrame
+        let first = OverlayLayout.make(in: area, expanded: true, horizontal: 0, vertical: 0).contentFrame
+        let last = OverlayLayout.make(in: area, expanded: true, horizontal: 1, vertical: 1).contentFrame
+        let x = dragOrigin.x + current.x - start.x
+        let top = dragOrigin.y + current.y - start.y
+        store.preferences.overlayScreenID = screenID(screen)
+        store.preferences.overlayHorizontal = OverlayLayout.unit(Double((x - first.minX) / max(1, last.minX - first.minX)))
+        store.preferences.overlayVertical = OverlayLayout.unit(Double((first.maxY - top) / max(1, first.maxY - last.maxY)))
+        layout()
     }
 
     private func makeMenu() -> NSMenu {

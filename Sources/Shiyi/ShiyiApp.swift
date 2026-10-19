@@ -59,8 +59,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return event
         }
         hotKey.onPress = { [weak self] in
-            self?.store.showOverlay()
-            self?.monitor.captureManually(reportFailure: false)
+            guard let self else { return }
+            if self.store.isOverlayVisible {
+                self.store.dismiss()
+            } else {
+                self.store.showOverlay()
+                self.monitor.captureManually(reportFailure: false)
+            }
         }
         configureShortcut(store.preferences.overlayShortcut)
         store.preferences.$overlayShortcut.dropFirst().receive(on: DispatchQueue.main).sink { [weak self] shortcut in
