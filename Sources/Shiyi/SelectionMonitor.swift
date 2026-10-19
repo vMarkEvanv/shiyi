@@ -55,10 +55,12 @@ final class SelectionMonitor {
         switch event.type {
         case .leftMouseDown:
             invalidate()
+            clearLastSelection()
             onOutsideClick?()
         case .leftMouseUp:
             if preferences.autoTranslate { schedule(manual: false, delay: 0.35) }
         case .keyDown:
+            clearLastSelection()
             if event.keyCode == 53 { invalidate(); onEscape?() }
             else { invalidate() }
         case .keyUp:

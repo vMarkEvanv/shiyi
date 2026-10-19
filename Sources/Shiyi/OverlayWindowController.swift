@@ -124,7 +124,7 @@ final class OverlayWindowController: NSObject {
     }
 
     private func layout() {
-        let screen = NSScreen.screens.first { screenID($0) == store.preferences.overlayScreenID } ?? NSScreen.main ?? NSScreen.screens.first
+        let screen = NSScreen.screens.first { screenID($0) == store.preferences.overlayScreenID } ?? NSScreen.screens.first ?? NSScreen.main
         let area = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let result = OverlayLayout.make(in: area, expanded: store.isOverlayExpanded,
                                         horizontal: store.preferences.overlayHorizontal, vertical: store.preferences.overlayVertical)

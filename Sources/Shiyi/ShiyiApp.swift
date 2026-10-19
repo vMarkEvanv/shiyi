@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var permissionTimer: Timer?
     private var localKeyMonitor: Any?
     private var observers = Set<AnyCancellable>()
+    private var revertingShortcut: OverlayShortcut?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -85,11 +86,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func configureShortcut(_ shortcut: OverlayShortcut) {
+        if revertingShortcut == shortcut { revertingShortcut = nil; return }
         if hotKey.register(shortcut) {
             store.shortcutError = nil
         } else {
             store.shortcutError = "这个快捷键已被占用，请选择其他组合。仍可用主窗口的“显示浮窗”按钮。"
             if let previous = hotKey.currentShortcut, previous != shortcut {
+                revertingShortcut = previous
                 store.preferences.overlayShortcut = previous
             }
         }
