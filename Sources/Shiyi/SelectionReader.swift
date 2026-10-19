@@ -63,7 +63,7 @@ struct SelectionReader {
         }
         // A browser's focused element may be its native container, while the
         // document selection belongs to a descendant web area (including frames).
-        if BrowserAccessibility.isChromium(bundleID), let window = element(app, kAXFocusedWindowAttribute) {
+        if BrowserAccessibility.usesWebAccessibility(bundleID), let window = element(app, kAXFocusedWindowAttribute) {
             let deadline = Date().addingTimeInterval(1)
             var pending: [(AXUIElement, Int)] = [(window, 0)]
             var visited = 0
@@ -141,13 +141,20 @@ final class BrowserAccessibility {
         bundleID == "company.thebrowser.Browser"
     }
 
+    nonisolated static func usesWebAccessibility(_ bundleID: String) -> Bool {
+        isChromium(bundleID) || bundleID == "notion.id"
+    }
+
     @discardableResult func prepare(_ app: NSRunningApplication) -> TimeInterval {
-        guard Self.isChromium(app.bundleIdentifier ?? ""), AXIsProcessTrusted() else { return 0 }
+        guard Self.usesWebAccessibility(app.bundleIdentifier ?? ""), AXIsProcessTrusted() else { return 0 }
         let pid = app.processIdentifier
         if let entry = prepared[pid], entry.launch == (app.launchDate ?? Date.distantPast) { return max(0, entry.ready.timeIntervalSinceNow) }
         let element = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(element, 0.25)
-        AXUIElementSetAttributeValue(element, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+        // Electron uses its documented manual activation attribute; Chrome
+        // uses enhanced UI. Keep these separate to preserve browser behavior.
+        let attribute = app.bundleIdentifier == "notion.id" ? "AXManualAccessibility" : "AXEnhancedUserInterface"
+        AXUIElementSetAttributeValue(element, attribute as CFString, kCFBooleanTrue)
         prepared[pid] = (app.launchDate ?? Date.distantPast, Date().addingTimeInterval(2.2))
         return 2.2
     }
