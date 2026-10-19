@@ -5,7 +5,8 @@ import Foundation
 final class Preferences: ObservableObject {
     @Published var autoTranslate: Bool { didSet { defaults.set(autoTranslate, forKey: "autoTranslate") } }
     @Published var engine: TranslationEngine { didSet { defaults.set(engine.rawValue, forKey: "engine") } }
-    @Published var target: TargetLanguage { didSet { defaults.set(target.rawValue, forKey: "target") } }
+    @Published var source: TranslationLanguage { didSet { defaults.set(source.rawValue, forKey: "source") } }
+    @Published var target: TranslationLanguage { didSet { defaults.set(target.rawValue, forKey: "target") } }
     @Published var endpoint: String { didSet { defaults.set(endpoint, forKey: "endpoint") } }
     @Published var model: String { didSet { defaults.set(model, forKey: "model") } }
     @Published var sendContext: Bool { didSet { defaults.set(sendContext, forKey: "sendContext") } }
@@ -22,7 +23,8 @@ final class Preferences: ObservableObject {
         self.keychain = keychain
         autoTranslate = defaults.object(forKey: "autoTranslate") as? Bool ?? true
         engine = TranslationEngine(rawValue: defaults.string(forKey: "engine") ?? "") ?? .system
-        target = TargetLanguage(rawValue: defaults.string(forKey: "target") ?? "") ?? .simplifiedChinese
+        source = TranslationLanguage(rawValue: defaults.string(forKey: "source") ?? "") ?? .english
+        target = TranslationLanguage(rawValue: defaults.string(forKey: "target") ?? "") ?? .simplifiedChinese
         endpoint = defaults.string(forKey: "endpoint") ?? ""
         model = defaults.string(forKey: "model") ?? ""
         sendContext = defaults.object(forKey: "sendContext") as? Bool ?? true
@@ -34,6 +36,12 @@ final class Preferences: ObservableObject {
             apiKey = ""
             lastKeyError = error.localizedDescription
         }
+    }
+
+    func swapLanguages() {
+        let previousSource = source
+        source = target
+        target = previousSource
     }
 
     func saveAPIKey() throws {

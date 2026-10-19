@@ -7,7 +7,7 @@ struct SystemTranslationHost: View {
 
     var body: some View {
         Group {
-            if let job = store.job, job.engine == .system {
+            if let job = store.job, job.engine == .system, job.source != job.target {
                 SystemTranslationTaskView(store: store, job: job)
                     .id(job.id)
             }
@@ -23,20 +23,20 @@ private struct SystemTranslationTaskView: View {
         Color.clear
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .allowsHitTesting(false)
-            .translationTask(source: nil, target: Locale.Language(identifier: job.target.rawValue)) { session in
-                var stage = "检测语言"
+            .translationTask(source: Locale.Language(identifier: job.source.rawValue), target: Locale.Language(identifier: job.target.rawValue)) { session in
+                var stage = "检查语言包"
                 var languageState = ""
                 do {
                     try Task.checkCancellation()
-                    let availability = try await LanguageAvailability().status(
-                        for: job.selection.text,
+                    let availability = await LanguageAvailability().status(
+                        from: Locale.Language(identifier: job.source.rawValue),
                         to: Locale.Language(identifier: job.target.rawValue)
                     )
                     try Task.checkCancellation()
                     switch availability {
                     case .unsupported:
                         await MainActor.run {
-                            store.fail("系统翻译暂不支持这段文字与\(job.target.title)之间的翻译。若原文已经是目标语言，无需再次翻译；也可以切换至 AI 语境翻译。", jobID: job.id)
+                            store.fail("系统翻译暂不支持\(job.source.title) → \(job.target.title)，请更换语言对或切换至 AI 语境翻译。", jobID: job.id)
                         }
                         return
                     case .supported:
@@ -48,8 +48,7 @@ private struct SystemTranslationTaskView: View {
                         languageState = "语言包状态未知"
                     }
                     stage = "执行翻译"
-                    // With source=nil, prepareTranslation() cannot identify a language.
-                    // translate(_:) detects it from this text and requests downloads as needed.
+                    // Both languages are explicit, including for a single selected word.
                     let response = try await session.translate(job.selection.text)
                     try Task.checkCancellation()
                     let output = TranslationOutput(

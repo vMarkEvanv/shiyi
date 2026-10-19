@@ -82,6 +82,41 @@ final class AppStoreLifecycleTests: XCTestCase {
     }
 
     @MainActor
+    func testLanguagePairIsSnapshottedAndRetryUsesNewPair() {
+        let (store, defaults, name) = makeStore()
+        defer { defaults.removePersistentDomain(forName: name) }
+        store.preferences.source = .german
+        store.preferences.target = .english
+        store.translate(selection("Wort"))
+        let originalID = store.job!.id
+        store.preferences.swapLanguages()
+        XCTAssertEqual(store.job?.source, .german)
+        XCTAssertEqual(store.job?.target, .english)
+        store.retry()
+        XCTAssertNotEqual(store.job?.id, originalID)
+        XCTAssertEqual(store.job?.source, .english)
+        XCTAssertEqual(store.job?.target, .german)
+        let restored = Preferences(defaults: defaults, keychain: EmptyKeys())
+        XCTAssertEqual(restored.source, .english)
+        XCTAssertEqual(restored.target, .german)
+    }
+
+    @MainActor
+    func testSameLanguageReturnsOriginalWithoutCallingAnEngine() {
+        let (store, defaults, name) = makeStore()
+        defer { defaults.removePersistentDomain(forName: name) }
+        store.preferences.source = .english
+        store.preferences.target = .english
+        store.preferences.engine = .contextual
+        store.translate(selection("token"))
+        guard case .finished(let output) = store.phase else {
+            return XCTFail("Same-language input should complete without credentials or a network request")
+        }
+        XCTAssertEqual(output.translation, "token")
+        XCTAssertEqual(output.detectedScene, "无需翻译")
+    }
+
+    @MainActor
     func testRetryAfterContextDisabledDropsContextAndTitle() {
         let (store, defaults, name) = makeStore()
         defer { defaults.removePersistentDomain(forName: name) }

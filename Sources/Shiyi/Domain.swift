@@ -7,7 +7,7 @@ enum TranslationEngine: String, CaseIterable, Identifiable {
     var title: String { self == .system ? "系统翻译" : "AI 语境翻译" }
 }
 
-enum TargetLanguage: String, CaseIterable, Identifiable {
+enum TranslationLanguage: String, CaseIterable, Identifiable {
     case simplifiedChinese = "zh-Hans"
     case english = "en"
     case german = "de"
@@ -37,7 +37,8 @@ struct CapturedSelection: Equatable {
 struct TranslationJob: Identifiable {
     let id = UUID()
     let selection: CapturedSelection
-    let target: TargetLanguage
+    let source: TranslationLanguage
+    let target: TranslationLanguage
     let engine: TranslationEngine
 }
 

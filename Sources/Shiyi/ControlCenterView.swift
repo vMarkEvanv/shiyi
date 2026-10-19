@@ -144,13 +144,7 @@ struct ControlCenterView: View {
                 .padding(7)
                 .background(ShiyiTheme.canvas.opacity(0.7), in: RoundedRectangle(cornerRadius: 10))
                 HStack {
-                    Text("译为").font(.system(size: 11)).foregroundStyle(ShiyiTheme.muted)
-                    Picker("目标语言", selection: $preferences.target) {
-                        ForEach(TargetLanguage.allCases) { language in Text(language.title).tag(language) }
-                    }
-                    .labelsHidden()
-                    .frame(width: 108)
-                    .controlSize(.small)
+                    languagePairControls
                     Spacer()
                     Button { store.translateManual() } label: {
                         HStack(spacing: 7) {
@@ -264,13 +258,12 @@ struct ControlCenterView: View {
                 .controlSize(.small)
                 Divider()
                 HStack {
-                    Text("目标语言").font(.system(size: 12))
+                    Text("翻译语言").font(.system(size: 12))
                     Spacer()
-                    Picker("目标语言", selection: $preferences.target) {
-                        ForEach(TargetLanguage.allCases) { language in Text(language.title).tag(language) }
-                    }
-                    .labelsHidden().frame(width: 155)
+                    languagePairControls
                 }
+                Text("按你选择的原文语言翻译，不自动识别。此设置也适用于其他应用中的划词。")
+                    .font(.system(size: 10)).foregroundStyle(ShiyiTheme.muted)
             }
         }
         card {
@@ -412,6 +405,26 @@ struct ControlCenterView: View {
                 }
             }
         }
+    }
+
+    private var languagePairControls: some View {
+        HStack(spacing: 7) {
+            Text("从").font(.system(size: 11)).foregroundStyle(ShiyiTheme.muted)
+            Picker("原文语言", selection: $preferences.source) {
+                ForEach(TranslationLanguage.allCases) { language in Text(language.title).tag(language) }
+            }
+            .labelsHidden().frame(width: 100)
+            Button { preferences.swapLanguages() } label: {
+                Image(systemName: "arrow.left.arrow.right")
+            }
+            .buttonStyle(.plain).help("交换原文语言与目标语言")
+            Text("到").font(.system(size: 11)).foregroundStyle(ShiyiTheme.muted)
+            Picker("目标语言", selection: $preferences.target) {
+                ForEach(TranslationLanguage.allCases) { language in Text(language.title).tag(language) }
+            }
+            .labelsHidden().frame(width: 100)
+        }
+        .controlSize(.small)
     }
 
     private func sectionTitle(_ title: String, symbol: String) -> some View {

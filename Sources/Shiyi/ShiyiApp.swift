@@ -71,11 +71,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if let permissionTimer { RunLoop.main.add(permissionTimer, forMode: .common) }
         Publishers.MergeMany([
             store.preferences.$engine.map { _ in () }.eraseToAnyPublisher(),
+            store.preferences.$source.map { _ in () }.eraseToAnyPublisher(),
             store.preferences.$target.map { _ in () }.eraseToAnyPublisher(),
             store.preferences.$sendContext.map { _ in () }.eraseToAnyPublisher(),
             store.preferences.$autoTranslate.map { _ in () }.eraseToAnyPublisher(),
             store.preferences.$excludedBundleIDs.map { _ in () }.eraseToAnyPublisher()
-        ]).dropFirst(5).sink { [weak self] in
+        ]).dropFirst(6).sink { [weak self] in
             // Preference changes invalidate an in-flight capture before it can send data.
             self?.monitor.invalidate()
             self?.store.dismiss()

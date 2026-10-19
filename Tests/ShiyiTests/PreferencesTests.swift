@@ -13,6 +13,7 @@ final class PreferencesTests: XCTestCase {
         XCTAssertTrue(preferences.sendContext)
         XCTAssertEqual(preferences.engine, .system)
         XCTAssertEqual(preferences.target, .simplifiedChinese)
+        XCTAssertEqual(preferences.source, .english)
         XCTAssertEqual(preferences.scene, "自动")
         XCTAssertTrue(preferences.excludedBundleIDs.contains("com.apple.keychainaccess"))
         XCTAssertEqual(preferences.apiKey, "original-key")
@@ -21,6 +22,7 @@ final class PreferencesTests: XCTestCase {
         preferences.sendContext = false
         preferences.engine = .contextual
         preferences.target = .english
+        preferences.source = .german
         preferences.endpoint = "https://api.example.com/v1"
         preferences.model = "a-model"
         preferences.scene = "技术文档"
@@ -35,6 +37,7 @@ final class PreferencesTests: XCTestCase {
         XCTAssertFalse(restored.sendContext)
         XCTAssertEqual(restored.engine, .contextual)
         XCTAssertEqual(restored.target, .english)
+        XCTAssertEqual(restored.source, .german)
         XCTAssertEqual(restored.endpoint, preferences.endpoint)
         XCTAssertEqual(restored.model, preferences.model)
         XCTAssertEqual(restored.scene, preferences.scene)

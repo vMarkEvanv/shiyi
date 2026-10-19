@@ -24,10 +24,14 @@ final class AppStore: ObservableObject {
     func translate(_ captured: CapturedSelection) {
         cancelCurrentJob()
         selection = captured
-        let next = TranslationJob(selection: captured, target: preferences.target, engine: preferences.engine)
+        let next = TranslationJob(selection: captured, source: preferences.source, target: preferences.target, engine: preferences.engine)
         job = next
         phase = .loading
         onShowPanel?(captured.anchor)
+        if next.source == next.target {
+            complete(TranslationOutput(translation: captured.text, explanation: "原文语言与目标语言相同，已保留原文。", alternatives: [], detectedScene: "无需翻译"), jobID: next.id)
+            return
+        }
         guard next.engine == .contextual else { return }
         // Snapshot all settings: a request never mixes an old selection with new credentials.
         let endpoint = preferences.endpoint
@@ -37,7 +41,7 @@ final class AppStore: ObservableObject {
         let scene = preferences.scene
         translationTask = Task { [weak self, client] in
             do {
-                let output = try await client.translate(selection: captured, target: next.target, endpoint: endpoint,
+                let output = try await client.translate(selection: captured, source: next.source, target: next.target, endpoint: endpoint,
                                                         model: model, apiKey: key, sendContext: includeContext, scene: scene)
                 guard !Task.isCancelled else { return }
                 self?.complete(output, jobID: next.id)
