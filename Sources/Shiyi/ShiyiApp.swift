@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let store = AppStore()
     private lazy var monitor = SelectionMonitor(preferences: store.preferences)
     private lazy var overlay = OverlayWindowController(store: store)
+    private lazy var copyShortcut = CopyTranslationShortcut(preferences: store.preferences)
     private let hotKey = GlobalHotKey()
     private var statusItem: NSStatusItem!
     private var controlWindow: NSWindow?
@@ -47,6 +48,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let self else { return true }
             return !self.store.isOverlayVisible || self.store.isPreparingSystemLanguages
         }
+        copyShortcut.onText = { [weak self] text in
+            guard let self else { return }
+            self.monitor.invalidate()
+            self.store.showOverlay()
+            self.store.translate(CapturedSelection(text: text, context: "", appName: "复制翻译", bundleID: "",
+                                                   documentTitle: "", anchor: NSEvent.mouseLocation))
+        }
+        copyShortcut.onFailure = { [weak self] message in
+            self?.store.showOverlay()
+            self?.store.captureFailed(message)
+        }
+        copyShortcut.start()
+        store.preferences.$copyThenTranslate.dropFirst().sink { [weak self] enabled in
+            if !enabled { self?.copyShortcut.cancel() }
+        }.store(in: &observers)
         monitor.start()
         store.$permissionGranted.removeDuplicates().dropFirst().sink { [weak self] _ in
             self?.monitor.restart()

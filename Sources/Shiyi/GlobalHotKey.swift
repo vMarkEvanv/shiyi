@@ -13,8 +13,12 @@ final class GlobalHotKey {
         if eventHandler == nil {
             var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
             let pointer = Unmanaged.passUnretained(self).toOpaque()
-            let status = InstallEventHandler(GetApplicationEventTarget(), { _, _, userData -> OSStatus in
-                guard let userData else { return OSStatus(eventNotHandledErr) }
+            let status = InstallEventHandler(GetApplicationEventTarget(), { _, event, userData -> OSStatus in
+                guard let userData, let event else { return OSStatus(eventNotHandledErr) }
+                var identifier = EventHotKeyID()
+                GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil,
+                                  MemoryLayout<EventHotKeyID>.size, nil, &identifier)
+                guard identifier.signature == 0x53485949, identifier.id == 1 else { return OSStatus(eventNotHandledErr) }
                 let hotKey = Unmanaged<GlobalHotKey>.fromOpaque(userData).takeUnretainedValue()
                 Task { @MainActor in hotKey.onPress?() }
                 return noErr

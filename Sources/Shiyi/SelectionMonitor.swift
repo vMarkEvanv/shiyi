@@ -53,6 +53,7 @@ final class SelectionMonitor {
     }
 
     private func handle(_ event: NSEvent) {
+        guard event.cgEvent?.getIntegerValueField(.eventSourceUserData) != ClipboardSelectionReader.eventTag else { return }
         switch event.type {
         case .leftMouseDown:
             invalidate()
@@ -107,10 +108,19 @@ final class SelectionMonitor {
             let anchor = NSEvent.mouseLocation
             let pid = app.processIdentifier
             let appName = app.localizedName ?? "当前应用"
-            let result: Result<CapturedSelection, Error> = await withCheckedContinuation { continuation in
+            var result: Result<CapturedSelection, Error> = await withCheckedContinuation { continuation in
                 self.queue.async {
                     continuation.resume(returning: Result { try SelectionReader().read(pid: pid, appName: appName, bundleID: bundleID, anchor: anchor, includeContext: includeContext) })
                 }
+            }
+            guard !Task.isCancelled, token == self.generation else { return }
+            if bundleID == "com.kingsoft.wpsoffice.mac", case .failure(let error) = result,
+               let reason = error as? SelectionReadError, case .noSelection = reason {
+                do {
+                    let text = try await ClipboardSelectionReader().read(pid: pid)
+                    result = .success(CapturedSelection(text: text, context: "", appName: appName, bundleID: bundleID,
+                                                        documentTitle: "", anchor: anchor))
+                } catch { result = .failure(error) }
             }
             guard !Task.isCancelled, token == self.generation else { return }
             guard manual || (self.preferences.autoTranslate && !(self.shouldSkipAutomatic?() ?? false)) else { return }

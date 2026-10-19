@@ -3,6 +3,7 @@ import Foundation
 
 @MainActor
 final class Preferences: ObservableObject {
+    @Published var copyThenTranslate: Bool { didSet { defaults.set(copyThenTranslate, forKey: "copyThenTranslate") } }
     @Published var autoTranslate: Bool { didSet { defaults.set(autoTranslate, forKey: "autoTranslate") } }
     @Published var engine: TranslationEngine { didSet { defaults.set(engine.rawValue, forKey: "engine") } }
     @Published var source: TranslationLanguage { didSet { defaults.set(source.rawValue, forKey: "source") } }
@@ -26,6 +27,7 @@ final class Preferences: ObservableObject {
     init(defaults: UserDefaults = .standard, keychain: any APIKeyStoring = KeychainStore()) {
         self.defaults = defaults
         self.keychain = keychain
+        copyThenTranslate = defaults.object(forKey: "copyThenTranslate") as? Bool ?? true
         autoTranslate = defaults.object(forKey: "autoTranslate") as? Bool ?? true
         engine = TranslationEngine(rawValue: defaults.string(forKey: "engine") ?? "") ?? .system
         source = TranslationLanguage(rawValue: defaults.string(forKey: "source") ?? "") ?? .english

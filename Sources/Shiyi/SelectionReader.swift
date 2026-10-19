@@ -81,10 +81,19 @@ struct SelectionReader {
 
     private func selectedText(_ source: AXUIElement) -> String? {
         if let text = string(source, kAXSelectedTextAttribute), !text.isEmpty { return text }
-        guard let range = value(source, "AXSelectedTextMarkerRange") else { return nil }
         var result: CFTypeRef?
-        guard AXUIElementCopyParameterizedAttributeValue(source, "AXStringForTextMarkerRange" as CFString,
-                                                         range, &result) == .success else { return nil }
+        if let range = value(source, "AXSelectedTextMarkerRange"),
+           AXUIElementCopyParameterizedAttributeValue(source, "AXStringForTextMarkerRange" as CFString,
+                                                      range, &result) == .success,
+           let text = result as? String, !text.isEmpty { return text }
+        // Some document editors expose only the range and range-string API.
+        guard let raw = value(source, kAXSelectedTextRangeAttribute), CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
+        var range = CFRange()
+        guard AXValueGetValue(raw as! AXValue, .cfRange, &range), range.location >= 0,
+              range.length > 0, range.length <= 20_000 else { return nil }
+        result = nil
+        guard AXUIElementCopyParameterizedAttributeValue(source, kAXStringForRangeParameterizedAttribute as CFString,
+                                                         raw, &result) == .success else { return nil }
         return result as? String
     }
 

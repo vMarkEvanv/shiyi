@@ -261,6 +261,10 @@ struct ControlCenterView: View {
                 }
                 .toggleStyle(.switch)
                 .controlSize(.small)
+                Toggle("复制后按 T 翻译", isOn: $preferences.copyThenTranslate)
+                    .toggleStyle(.switch).controlSize(.small)
+                Text("按 ⌘C 复制文字，松开 ⌘，3 秒内单独按 T。触发后显示浮窗；其他按键会取消等待，不额外读取上下文。")
+                    .font(.system(size: 10)).foregroundStyle(ShiyiTheme.muted)
                 Divider()
                 HStack {
                     Text("翻译语言").font(.system(size: 12))
