@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ControlCenterView: View {
     @ObservedObject var store: AppStore
+    @ObservedObject var voiceStore: VoiceTranslationStore
     @ObservedObject private var preferences: Preferences
     @State private var page: Page = .reading
     @State private var keyStatus = ""
@@ -9,10 +10,12 @@ struct ControlCenterView: View {
     private enum Page: String, CaseIterable {
         case reading = "阅读"
         case preferences = "偏好设置"
-        var symbol: String { self == .reading ? "text.book.closed" : "slider.horizontal.3" }
+        case voice = "语音翻译"
+        var symbol: String { self == .reading ? "text.book.closed" : (self == .voice ? "waveform" : "slider.horizontal.3") }
     }
 
-    init(store: AppStore) {
+    init(store: AppStore, voiceStore: VoiceTranslationStore) {
+        self.voiceStore = voiceStore
         self.store = store
         self.preferences = store.preferences
     }
@@ -26,6 +29,8 @@ struct ControlCenterView: View {
                     pageHeader
                     if page == .reading {
                         readingPage
+                    } else if page == .voice {
+                        VoiceSettingsView(store: voiceStore)
                     } else {
                         preferencesPage
                     }
@@ -43,6 +48,9 @@ struct ControlCenterView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ShiyiOpenPreferences"))) { _ in
             page = .preferences
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ShiyiOpenVoice"))) { _ in
+            page = .voice
         }
     }
 
@@ -102,9 +110,9 @@ struct ControlCenterView: View {
     private var pageHeader: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 7) {
-                Text(page == .reading ? "读懂眼前的每一句。" : "按你的习惯，轻轻调整。")
+                Text(page == .reading ? "读懂眼前的每一句。" : (page == .voice ? "听懂正在说的话。" : "按你的习惯，轻轻调整。"))
                     .font(.system(size: 25, weight: .semibold))
-                Text(page == .reading ? "按快捷键唤出浮窗，划词后在固定位置更新译文。" : "浮窗、翻译方式、阅读场景与隐私偏好。")
+                Text(page == .reading ? "按快捷键唤出浮窗，划词后在固定位置更新译文。" : (page == .voice ? "麦克风收音，本机识别与翻译。" : "浮窗、翻译方式、阅读场景与隐私偏好。"))
                     .font(.system(size: 12))
                     .foregroundStyle(ShiyiTheme.muted)
             }

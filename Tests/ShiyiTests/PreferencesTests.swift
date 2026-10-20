@@ -3,6 +3,23 @@ import XCTest
 
 final class PreferencesTests: XCTestCase {
     @MainActor
+    func testVoiceLanguagesAndShortcutPersistIndependentlyOfTextTranslation() throws {
+        let suite = "ShiyiTests.voicePrefs.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = Preferences(defaults: defaults, keychain: MemoryKeychain(""))
+        preferences.voiceSource = .german
+        preferences.voiceTarget = .english
+        preferences.voiceShortcut = .controlShiftR
+        let restored = Preferences(defaults: defaults, keychain: MemoryKeychain(""))
+        XCTAssertEqual(restored.voiceSource, .german)
+        XCTAssertEqual(restored.voiceTarget, .english)
+        XCTAssertEqual(restored.voiceShortcut, .controlShiftR)
+        XCTAssertEqual(restored.source, .english)
+        XCTAssertEqual(restored.target, .simplifiedChinese)
+    }
+
+    @MainActor
     func testPreferencesPersistWhileAPIKeyRequiresExplicitKeychainSave() async throws {
         let suite = "ShiyiTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

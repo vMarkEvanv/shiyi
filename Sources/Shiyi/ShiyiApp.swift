@@ -14,6 +14,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var monitor = SelectionMonitor(preferences: store.preferences)
     private lazy var overlay = OverlayWindowController(store: store)
     private lazy var copyShortcut = CopyTranslationShortcut(preferences: store.preferences)
+    private lazy var voiceStore = VoiceTranslationStore(preferences: store.preferences)
+    private lazy var voiceWindow = VoiceWindowController(store: voiceStore)
+    private let voiceHotKey = VoiceHotKey()
+    private var revertingVoiceShortcut: VoiceShortcut?
     private let hotKey = GlobalHotKey()
     private var statusItem: NSStatusItem!
     private var controlWindow: NSWindow?
@@ -26,6 +30,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.setActivationPolicy(.accessory)
         _ = overlay
         installStatusItem()
+        voiceStore.onShowWindow = { [weak self] in self?.voiceWindow.show() }
+        voiceHotKey.onPress = { [weak self] in self?.voiceWindow.toggle() }
+        Task { [weak self] in await self?.voiceStore.model.refresh() }
+        configureVoiceShortcut(store.preferences.voiceShortcut)
+        store.preferences.$voiceShortcut.dropFirst().receive(on: DispatchQueue.main).sink { [weak self] in
+            self?.configureVoiceShortcut($0)
+        }.store(in: &observers)
         store.onShowPanel = { [weak self] in self?.overlay.show() }
         store.onDismissPanel = { [weak self] in
             self?.overlay.hide()
@@ -106,6 +117,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         showControlCenter()
     }
 
+    private func configureVoiceShortcut(_ shortcut: VoiceShortcut) {
+        if revertingVoiceShortcut == shortcut { revertingVoiceShortcut = nil; return }
+        if voiceHotKey.register(shortcut) { voiceStore.shortcutError = nil }
+        else {
+            voiceStore.shortcutError = "语音快捷键已被占用，请选择其他组合；仍可用主窗口打开。"
+            if let previous = voiceHotKey.current, previous != shortcut {
+                revertingVoiceShortcut = previous
+                store.preferences.voiceShortcut = previous
+            }
+        }
+    }
+
     private func configureShortcut(_ shortcut: OverlayShortcut) {
         if revertingShortcut == shortcut { revertingShortcut = nil; return }
         if hotKey.register(shortcut) {
@@ -135,6 +158,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         addItem("显示浮窗 · " + store.preferences.overlayShortcut.title, action: #selector(showOverlay), to: menu)
         addItem("翻译选中文字", action: #selector(translateSelection), to: menu)
+        addItem("语音实时翻译 · " + store.preferences.voiceShortcut.title, action: #selector(showVoice), to: menu)
+        addItem("语音翻译设置…", action: #selector(openVoiceSettings), to: menu)
         menu.addItem(.separator())
         addItem("打开拾译…", action: #selector(openControlCenter), to: menu)
         if !store.permissionGranted { addItem("开启辅助功能权限…", action: #selector(requestAccessibility), to: menu) }
@@ -151,6 +176,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return item
     }
 
+    @objc private func showVoice() { voiceWindow.show() }
+    @objc private func openVoiceSettings() {
+        showControlCenter()
+        NotificationCenter.default.post(name: Notification.Name("ShiyiOpenVoice"), object: nil)
+    }
+    func applicationWillTerminate(_ notification: Notification) {
+        voiceStore.stop(cancelPending: true)
+        voiceStore.model.shutdown()
+    }
+
     @objc private func showOverlay() { store.showOverlay() }
     @objc private func translateSelection() { store.showOverlay(); monitor.captureManually() }
     @objc private func openControlCenter() { showControlCenter() }
@@ -165,7 +200,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             window.titlebarAppearsTransparent = true
             window.isReleasedWhenClosed = false
             window.minSize = NSSize(width: 760, height: 620)
-            window.contentViewController = NSHostingController(rootView: ControlCenterView(store: store))
+            window.contentViewController = NSHostingController(rootView: ControlCenterView(store: store, voiceStore: voiceStore))
             window.center()
             window.setFrameAutosaveName("ShiyiControlCenter")
             controlWindow = window

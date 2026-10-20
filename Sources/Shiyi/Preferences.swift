@@ -3,6 +3,9 @@ import Foundation
 
 @MainActor
 final class Preferences: ObservableObject {
+    @Published var voiceSource: TranslationLanguage { didSet { defaults.set(voiceSource.rawValue, forKey: "voiceSource") } }
+    @Published var voiceTarget: TranslationLanguage { didSet { defaults.set(voiceTarget.rawValue, forKey: "voiceTarget") } }
+    @Published var voiceShortcut: VoiceShortcut { didSet { defaults.set(voiceShortcut.rawValue, forKey: "voiceShortcut") } }
     @Published var copyThenTranslate: Bool { didSet { defaults.set(copyThenTranslate, forKey: "copyThenTranslate") } }
     @Published var autoTranslate: Bool { didSet { defaults.set(autoTranslate, forKey: "autoTranslate") } }
     @Published var engine: TranslationEngine { didSet { defaults.set(engine.rawValue, forKey: "engine") } }
@@ -27,6 +30,9 @@ final class Preferences: ObservableObject {
     init(defaults: UserDefaults = .standard, keychain: any APIKeyStoring = KeychainStore()) {
         self.defaults = defaults
         self.keychain = keychain
+        voiceSource = TranslationLanguage(rawValue: defaults.string(forKey: "voiceSource") ?? "") ?? .english
+        voiceTarget = TranslationLanguage(rawValue: defaults.string(forKey: "voiceTarget") ?? "") ?? .simplifiedChinese
+        voiceShortcut = VoiceShortcut(rawValue: defaults.string(forKey: "voiceShortcut") ?? "") ?? .optionCommandR
         copyThenTranslate = defaults.object(forKey: "copyThenTranslate") as? Bool ?? true
         autoTranslate = defaults.object(forKey: "autoTranslate") as? Bool ?? true
         engine = TranslationEngine(rawValue: defaults.string(forKey: "engine") ?? "") ?? .system
