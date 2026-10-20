@@ -107,13 +107,15 @@ Windows 应用放在 `platforms/windows/`，平台 UI、选区读取、凭据存
 
 ### 麦克风实时翻译（v0.4.0）
 
-- 默认快捷键 **⌥⌘R** 打开/关闭独立置顶字幕窗，也可从菜单栏或主窗口打开。点击“开始”才使用麦克风；点击停止、关闭语音窗或退出软件停止收音。
+- 默认快捷键 **⌥⌘R** 打开/关闭独立置顶字幕窗，也可从菜单栏或主窗口打开。快捷键打开字幕时开始收听，再按关闭并停止；也可在主窗口开始/停止收听。
 - 在主窗口“语音翻译”选择原文语言、目标语言和快捷键，独立于划词语言，不自动猜测语言。只采集麦克风，不采集电脑播放声音；本版不提供语音播报。
 - 免费本地翻译使用 **Google TranslateGemma 4B Q4_K_M**，由本机 Ollama 运行，不需要 API Key。首次准备约 175MB 推理组件、3.3GB 翻译模型，以及所需语音识别语言资源；模型不包含在 ZIP 中。
-- macOS 26 使用 SpeechAnalyzer 连续本机识别；旧系统使用要求离线的 Speech 兼容模式，资源不足或不支持时明确提示，不自动上传录音。录音不落盘，字幕只在本次运行的内存里保留，可在窗口内清空。
+- macOS 26 使用 SpeechAnalyzer 连续本机识别；旧系统使用要求离线的 Speech 兼容模式，资源不足或不支持时明确提示，不自动上传录音。录音不落盘，字幕只在本次运行的内存里保留，可在主窗口清空。
 - 原文实时显示，稳定成句后排队翻译。首次加载模型需要几秒，延迟取决于语速和硬件；8GB Mac 建议关闭其他占内存应用。不承诺零延迟或所有场景的最佳翻译质量。
 - 本地推理只绑定 `127.0.0.1:11439`，关闭 Ollama 云端功能；音频、转写文字和字幕不发送到云端翻译服务。首次资源下载仍需网络。
 - 资源位于 `~/Library/Application Support/com.shiyi.app/VoiceRuntime` 和 `VoiceModels`。推理组件固定版本并校验 SHA-256；模型使用 Google Gemma 许可，Ollama 使用其开源许可。
 - 参考 [TranslateGemma](https://blog.google/innovation-and-ai/technology/developers-tools/translategemma/)、[模型格式与许可](https://ollama.com/library/translategemma:4b)、[Ollama](https://github.com/ollama/ollama)。
 
 可选的本地音频集成检查：先准备模型，用 `say -v Samantha -o build/voice-fixture.aiff 'Good morning. The meeting starts at nine.'` 生成测试语音，再运行 `SHIYI_VOICE_TEST_FILE="$PWD/build/voice-fixture.aiff" ./scripts/test.sh --filter VoiceAudioIntegrationTests`。普通测试不下载模型、不使用麦克风。
+
+字幕样式：语音字幕无标题栏和按钮，只显示原文与对应译文；可拖动位置。在主窗口“语音翻译”调整字号（16–56 pt）及透明度（0%–80%），即时生效并保存；启动/停止、状态和错误提示也集中在主窗口。

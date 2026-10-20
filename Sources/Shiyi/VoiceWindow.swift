@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Carbon
+import Combine
 
 // Kept independent from the text-overlay shortcut and the temporary copy key.
 enum VoiceShortcut: String, CaseIterable, Identifiable {
@@ -53,81 +54,97 @@ final class VoiceHotKey {
     }
 }
 
+enum VoiceSubtitleStyle {
+    static func fontSize(_ value: Double) -> Double { value.isFinite ? min(56, max(16, value)) : 28 }
+}
+
 @MainActor
 final class VoiceWindowController: NSObject, NSWindowDelegate {
     private let store: VoiceTranslationStore
-    private let window: NSPanel
+    private let window: OverlayPanel
+    private var observers = Set<AnyCancellable>()
     init(store: VoiceTranslationStore) {
         self.store = store
-        window = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 580, height: 480),
-                         styleMask: [.titled, .closable, .resizable, .utilityWindow], backing: .buffered, defer: false)
+        let area = (NSScreen.screens.first ?? NSScreen.main)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let width = min(860, area.width - 40)
+        window = OverlayPanel(contentRect: NSRect(x: area.midX - width / 2, y: area.minY + 70, width: width, height: 150),
+                              styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
-        window.title = "拾译 · 麦克风实时翻译"
-        window.minSize = NSSize(width: 430, height: 320)
+        window.title = "拾译 · 语音字幕"
         window.level = .floating
         window.hidesOnDeactivate = false
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.isReleasedWhenClosed = false
-        window.contentViewController = NSHostingController(rootView: VoiceCaptionView(store: store))
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = false
+        window.isMovable = true
+        window.isMovableByWindowBackground = true
+        window.contentViewController = NSHostingController(rootView: VoiceSubtitleView(store: store, heightChanged: { [weak self] in self?.fitHeight($0) }))
         window.delegate = self
-        window.center()
-        window.setFrameAutosaveName("ShiyiVoiceCaptions")
+        window.setFrameAutosaveName("ShiyiVoiceSubtitles")
+        store.preferences.$voiceSubtitleOpacity.receive(on: DispatchQueue.main).sink { [weak self] value in
+            self?.window.alphaValue = OverlayLayout.opacity(value)
+        }.store(in: &observers)
     }
-    func show() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
-    func toggle() { if window.isVisible { close() } else { show() } }
+    private func fitHeight(_ height: CGFloat) {
+        guard height.isFinite, height > 0 else { return }
+        let area = window.screen?.visibleFrame ?? NSScreen.screens.first?.visibleFrame ?? window.frame
+        var frame = window.frame
+        frame.size.height = min(max(70, height), area.height - 24)
+        frame.origin.x = min(max(area.minX + 12, frame.minX), area.maxX - frame.width - 12)
+        frame.origin.y = min(max(area.minY + 12, frame.minY), area.maxY - frame.height - 12)
+        if abs(window.frame.height - frame.height) > 1 || window.frame.origin != frame.origin { window.setFrame(frame, display: true) }
+    }
+    func show() { window.orderFrontRegardless() }
+    func toggle() {
+        if window.isVisible { close() }
+        else { show(); store.start() }
+    }
     func close() { store.stop(cancelPending: true); window.orderOut(nil) }
     func windowShouldClose(_ sender: NSWindow) -> Bool { store.stop(cancelPending: true); return true }
 }
 
-private struct VoiceCaptionView: View {
+private struct SubtitleHeight: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+/// Only source text and its matching translation belong in the subtitle surface.
+private struct VoiceSubtitleView: View {
     @ObservedObject var store: VoiceTranslationStore
+    @ObservedObject private var preferences: Preferences
+    let heightChanged: (CGFloat) -> Void
+    init(store: VoiceTranslationStore, heightChanged: @escaping (CGFloat) -> Void) {
+        self.store = store; preferences = store.preferences; self.heightChanged = heightChanged
+    }
+    private var original: String { store.captions.last?.original ?? store.liveOriginal }
+    private var translation: String { store.captions.last?.translation ?? "" }
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Label(store.listening ? "麦克风正在收音" : "麦克风翻译", systemImage: store.listening ? "mic.fill" : "mic")
-                    .font(.headline).foregroundStyle(store.listening ? .red : ShiyiTheme.ink)
-                Spacer()
-                Button(store.listening || store.starting ? "停止" : "开始") {
-                    if store.listening || store.starting { store.stop() } else { store.start() }
-                }.keyboardShortcut(.space, modifiers: [])
-                Button("清空") { store.clear() }
+        VStack(spacing: 10) {
+            if !original.isEmpty {
+                Text(original)
+                    .font(.system(size: VoiceSubtitleStyle.fontSize(preferences.voiceSubtitleSize) * 0.7, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Text(store.status).font(.caption).foregroundStyle(ShiyiTheme.muted)
-            if store.listening { ProgressView(value: store.level).tint(ShiyiTheme.accent).accessibilityLabel("麦克风音量") }
-            if let error = store.error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
-            if !store.liveOriginal.isEmpty {
-                Text(store.liveOriginal).font(.system(size: 14)).foregroundStyle(ShiyiTheme.muted)
-                    .lineLimit(5).frame(maxWidth: .infinity, alignment: .leading)
+            if !translation.isEmpty {
+                Text(translation)
+                    .font(.system(size: VoiceSubtitleStyle.fontSize(preferences.voiceSubtitleSize), weight: .semibold))
+                    .foregroundStyle(.white)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Divider()
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 20) {
-                        if store.captions.isEmpty {
-                            Text("说话后，原文和译文会逐句显示在这里。\n开始前请在主窗口选择原文和目标语言。")
-                                .foregroundStyle(ShiyiTheme.muted).padding(.top, 24)
-                        }
-                        ForEach(store.captions) { caption in
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(caption.original).font(.system(size: 13)).foregroundStyle(ShiyiTheme.muted)
-                                if !caption.translation.isEmpty {
-                                    Text(caption.translation).font(.system(size: 21, weight: .medium))
-                                } else if let failure = caption.failure {
-                                    Text(failure).font(.caption).foregroundStyle(.orange)
-                                } else { Text("正在本地翻译…").foregroundStyle(ShiyiTheme.muted).font(.callout) }
-                            }.textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).id(caption.id)
-                        }
-                    }.padding(.vertical, 4)
-                }
-                .onChange(of: store.captions.count) { _, _ in
-                    if let last = store.captions.last { proxy.scrollTo(last.id, anchor: .bottom) }
-                }
-            }
-            Text("本机识别 · TranslateGemma 4B · 关闭窗口停止收音")
-                .font(.system(size: 10)).foregroundStyle(ShiyiTheme.muted)
-        }.padding(20).background(ShiyiTheme.canvas)
-            .foregroundStyle(ShiyiTheme.ink)
-            .environment(\.colorScheme, .light)
+        }
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 24).padding(.vertical, 18)
+        .background(RoundedRectangle(cornerRadius: 12).fill(.black.opacity(original.isEmpty && translation.isEmpty ? 0 : 0.85)))
+        .background(GeometryReader { geometry in Color.clear.preference(key: SubtitleHeight.self, value: geometry.size.height) })
+        .onPreferenceChange(SubtitleHeight.self) { height in
+            DispatchQueue.main.async { heightChanged(height) }
+        }
+        .frame(maxHeight: .infinity, alignment: .bottom)
+        .allowsHitTesting(false)
     }
 }
 
@@ -154,6 +171,34 @@ struct VoiceSettingsView: View {
             }
             if let message = store.shortcutError { Text(message).foregroundStyle(.orange).font(.caption) }
             Divider()
+            HStack {
+                Button(store.listening || store.starting ? "停止收听" : "开始收听") {
+                    if store.listening || store.starting { store.stop() }
+                    else { store.onShowWindow?(); store.start() }
+                }.buttonStyle(.borderedProminent)
+                Button("显示字幕") { store.onShowWindow?() }
+                Button("清空字幕") { store.clear() }
+            }
+            Text(store.status).font(.callout).foregroundStyle(ShiyiTheme.muted)
+            if let error = store.error { Text(error).font(.callout).foregroundStyle(.orange) }
+            if let failure = store.captions.last?.failure {
+                Text("本句翻译未完成：\(failure)").font(.caption).foregroundStyle(.orange)
+            }
+            HStack {
+                Text("字幕大小")
+                Slider(value: $preferences.voiceSubtitleSize, in: 16...56, step: 1).accessibilityLabel("字幕大小")
+                Text("\(Int(VoiceSubtitleStyle.fontSize(preferences.voiceSubtitleSize))) pt").monospacedDigit().frame(width: 52)
+            }
+            HStack {
+                Text("字幕透明度")
+                Slider(value: Binding(get: { 1 - OverlayLayout.opacity(preferences.voiceSubtitleOpacity) },
+                                      set: { preferences.voiceSubtitleOpacity = 1 - $0 }), in: 0...0.8)
+                    .accessibilityLabel("字幕透明度")
+                Text("\(Int(((1 - OverlayLayout.opacity(preferences.voiceSubtitleOpacity)) * 100).rounded()))%").monospacedDigit().frame(width: 52)
+            }
+            Text("字幕只显示原文和对应译文，可按住拖动。大小和透明度即时生效并保存；所有操作与设置都在主窗口。")
+                .font(.caption).foregroundStyle(ShiyiTheme.muted)
+            Divider()
             Text("免费本地模型").font(.headline)
             Text("Google TranslateGemma 4B（约 3.3GB）\n首次另需下载约 175MB 推理组件和本机语音语言资源。模型准备好后无需 API 密钥，音频与文字不发送到云端翻译服务。")
                 .font(.callout).foregroundStyle(ShiyiTheme.muted)
@@ -163,9 +208,8 @@ struct VoiceSettingsView: View {
                 Button(model.ready ? "检查模型" : "准备免费模型") { model.prepare() }.disabled(model.preparing)
                 if model.preparing { Button("取消下载") { model.cancelPreparation() } }
                 Spacer()
-                Button("打开语音字幕窗") { store.onShowWindow?() }.buttonStyle(.borderedProminent)
             }
-            Text("快捷键只打开或关闭窗口；点击“开始”后才请求麦克风权限。关闭窗口会停止收音。语言在这里手动选择，独立于划词翻译；旧版 macOS 使用离线识别兼容模式。")
+            Text("快捷键打开字幕并开始收听，再按关闭并停止；也可在这里开始/停止收听。首次使用会请求麦克风权限。语言在这里手动选择，独立于划词翻译；旧版 macOS 使用离线识别兼容模式。")
                 .font(.caption).foregroundStyle(ShiyiTheme.muted)
             Link("TranslateGemma 模型与许可", destination: URL(string: "https://ollama.com/library/translategemma:4b")!)
                 .font(.caption)

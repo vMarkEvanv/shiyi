@@ -3,6 +3,8 @@ import Foundation
 
 @MainActor
 final class Preferences: ObservableObject {
+    @Published var voiceSubtitleSize: Double { didSet { defaults.set(VoiceSubtitleStyle.fontSize(voiceSubtitleSize), forKey: "voiceSubtitleSize") } }
+    @Published var voiceSubtitleOpacity: Double { didSet { defaults.set(OverlayLayout.opacity(voiceSubtitleOpacity), forKey: "voiceSubtitleOpacity") } }
     @Published var voiceSource: TranslationLanguage { didSet { defaults.set(voiceSource.rawValue, forKey: "voiceSource") } }
     @Published var voiceTarget: TranslationLanguage { didSet { defaults.set(voiceTarget.rawValue, forKey: "voiceTarget") } }
     @Published var voiceShortcut: VoiceShortcut { didSet { defaults.set(voiceShortcut.rawValue, forKey: "voiceShortcut") } }
@@ -30,6 +32,8 @@ final class Preferences: ObservableObject {
     init(defaults: UserDefaults = .standard, keychain: any APIKeyStoring = KeychainStore()) {
         self.defaults = defaults
         self.keychain = keychain
+        voiceSubtitleSize = VoiceSubtitleStyle.fontSize(defaults.object(forKey: "voiceSubtitleSize") as? Double ?? 28)
+        voiceSubtitleOpacity = OverlayLayout.opacity(defaults.object(forKey: "voiceSubtitleOpacity") as? Double ?? 0.9)
         voiceSource = TranslationLanguage(rawValue: defaults.string(forKey: "voiceSource") ?? "") ?? .english
         voiceTarget = TranslationLanguage(rawValue: defaults.string(forKey: "voiceTarget") ?? "") ?? .simplifiedChinese
         voiceShortcut = VoiceShortcut(rawValue: defaults.string(forKey: "voiceShortcut") ?? "") ?? .optionCommandR
