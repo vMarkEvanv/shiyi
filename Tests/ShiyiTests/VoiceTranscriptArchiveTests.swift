@@ -57,4 +57,37 @@ final class VoiceTranscriptArchiveTests: XCTestCase {
         XCTAssertTrue(session.markdown.contains("Nicht fertig"))
         XCTAssertTrue(session.markdown.contains("未完成翻译：已取消"))
     }
+    @MainActor
+    func testRenameOldSessionPreservesCaptionsAndSurvivesRestart() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ShiyiRenameTests-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let archive = VoiceTranscriptArchive(directory: directory)
+        let id = archive.begin(source: .english, target: .simplifiedChinese)
+        let caption = VoiceCaption(id: UUID(), original: "Design review", translation: "设计评审")
+        archive.record(caption, sessionID: id); archive.end(id); archive.flush()
+        let reopened = VoiceTranscriptArchive(directory: directory)
+        let old = try await reopened.load(id)
+        XCTAssertNil(old.name)
+        try await reopened.rename(id, to: "  Product\nmeeting  ")
+        reopened.flush()
+        let restarted = VoiceTranscriptArchive(directory: directory)
+        await restarted.refresh()
+        let renamed = try await restarted.load(id)
+        XCTAssertEqual(renamed.name, "Product meeting")
+        XCTAssertEqual(renamed.captions, old.captions)
+        XCTAssertEqual(renamed.endedAt, old.endedAt)
+        XCTAssertEqual(restarted.sessions.first?.name, "Product meeting")
+        XCTAssertTrue(renamed.markdown.contains("Product meeting"))
+    }
+    func testRecordSearchFindsOriginalTranslationAndName() {
+        var session = VoiceTranscriptSession(source: .english, target: .simplifiedChinese)
+        session.name = "Product review"
+        session.upsert(VoiceCaption(id: UUID(), original: "Discuss Accessibility", translation: "讨论无障碍设计"))
+        XCTAssertTrue(session.matches("accessibility"))
+        XCTAssertTrue(session.matches("无障碍"))
+        XCTAssertTrue(session.matches("PRODUCT"))
+        XCTAssertFalse(session.matches("missing word"))
+        XCTAssertTrue(session.matches("  "))
+    }
+
 }

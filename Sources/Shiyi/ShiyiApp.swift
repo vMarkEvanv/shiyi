@@ -150,12 +150,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
+        Publishers.CombineLatest(voiceStore.$listening, voiceStore.$starting)
+            .receive(on: DispatchQueue.main).sink { [weak self] listening, starting in
+                let active = listening || starting
+                self?.statusItem.button?.image = NSImage(systemSymbolName: active ? "mic.fill" : "character.bubble", accessibilityDescription: active ? "拾译：正在收听麦克风" : "拾译：麦克风已停止")
+                self?.statusItem.button?.toolTip = active ? "拾译 · 正在收听麦克风" : "拾译 · 麦克风已停止"
+            }.store(in: &observers)
     }
 
     func menuWillOpen(_ menu: NSMenu) {
         menu.removeAllItems()
         let title = menu.addItem(withTitle: "拾译 · 语境划词翻译", action: nil, keyEquivalent: "")
         title.isEnabled = false
+        let microphone = menu.addItem(withTitle: voiceStore.listening || voiceStore.starting ? "麦克风：正在收听" : "麦克风：已停止", action: nil, keyEquivalent: "")
+        microphone.isEnabled = false
+        if voiceStore.listening || voiceStore.starting { addItem("停止收听", action: #selector(stopVoice), to: menu) }
         menu.addItem(.separator())
         addItem("显示浮窗 · " + store.preferences.overlayShortcut.title, action: #selector(showOverlay), to: menu)
         addItem("翻译选中文字", action: #selector(translateSelection), to: menu)
@@ -163,6 +172,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         addItem("语音翻译设置…", action: #selector(openVoiceSettings), to: menu)
         menu.addItem(.separator())
         addItem("打开拾译…", action: #selector(openControlCenter), to: menu)
+        let settings = addItem("设置…", action: #selector(openSettings), to: menu)
+        settings.keyEquivalent = ","
         if !store.permissionGranted { addItem("开启辅助功能权限…", action: #selector(requestAccessibility), to: menu) }
         menu.addItem(.separator())
         let quit = addItem("退出拾译", action: #selector(quit), to: menu)
@@ -177,7 +188,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return item
     }
 
-    @objc private func showVoice() { voiceWindow.show() }
+    @objc private func showVoice() { voiceWindow.toggle() }
+    @objc private func stopVoice() { voiceStore.stop() }
+    @objc private func openSettings() {
+        showControlCenter()
+        NotificationCenter.default.post(name: Notification.Name("ShiyiOpenPreferences"), object: nil)
+    }
     @objc private func openVoiceSettings() {
         showControlCenter()
         NotificationCenter.default.post(name: Notification.Name("ShiyiOpenVoice"), object: nil)

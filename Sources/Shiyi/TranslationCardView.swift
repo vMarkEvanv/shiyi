@@ -1,17 +1,19 @@
 import SwiftUI
 
 enum ShiyiTheme {
-    static let ink = Color(red: 0.14, green: 0.16, blue: 0.21)
-    static let accent = Color(red: 0.38, green: 0.38, blue: 0.80)
-    static let canvas = Color(red: 0.97, green: 0.96, blue: 0.94)
-    static let muted = Color(red: 0.47, green: 0.48, blue: 0.52)
-    static let line = Color.black.opacity(0.07)
+    static let ink = Color(nsColor: .labelColor)
+    static let accent = Color.accentColor
+    static let canvas = Color(nsColor: .windowBackgroundColor)
+    static let surface = Color(nsColor: .controlBackgroundColor)
+    static let muted = Color(nsColor: .secondaryLabelColor)
+    static let line = Color(nsColor: .separatorColor)
 }
 
 /// Read-only content. The separate native operation point is the only mouse target.
 struct TranslationCardView: View {
     @ObservedObject var store: AppStore
     @ObservedObject private var preferences: Preferences
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     init(store: AppStore) {
         self.store = store
@@ -57,15 +59,10 @@ struct TranslationCardView: View {
                     .padding(.vertical, 10)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-            Divider()
-            Text(store.isOverlayExpanded ? "在右上角操作点滚动浏览 · 右键复制或重试" : "鼠标可穿透 · 点击右上角操作点展开")
-                .font(.system(size: 10))
-                .foregroundStyle(ShiyiTheme.muted)
-                .frame(height: 28)
-                .padding(.horizontal, 17)
+
         }
         .frame(width: store.overlayWidth, height: store.overlayHeight)
-        .background(ShiyiTheme.canvas)
+        .background(ShiyiTheme.canvas.opacity(reduceTransparency || preferences.fadeEntireOverlay ? 1 : OverlayLayout.opacity(preferences.overlayOpacity)))
         .foregroundStyle(ShiyiTheme.ink)
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(ShiyiTheme.line))

@@ -3,6 +3,8 @@ import Foundation
 
 @MainActor
 final class Preferences: ObservableObject {
+    @Published var fadeEntireOverlay: Bool { didSet { defaults.set(fadeEntireOverlay, forKey: "fadeEntireOverlay") } }
+    @Published var fadeEntireSubtitles: Bool { didSet { defaults.set(fadeEntireSubtitles, forKey: "fadeEntireSubtitles") } }
     @Published var voiceSubtitleSize: Double { didSet { defaults.set(VoiceSubtitleStyle.fontSize(voiceSubtitleSize), forKey: "voiceSubtitleSize") } }
     @Published var voiceSubtitleOpacity: Double { didSet { defaults.set(OverlayLayout.opacity(voiceSubtitleOpacity), forKey: "voiceSubtitleOpacity") } }
     @Published var voiceSource: TranslationLanguage { didSet { defaults.set(voiceSource.rawValue, forKey: "voiceSource") } }
@@ -32,6 +34,8 @@ final class Preferences: ObservableObject {
     init(defaults: UserDefaults = .standard, keychain: any APIKeyStoring = KeychainStore()) {
         self.defaults = defaults
         self.keychain = keychain
+        fadeEntireOverlay = defaults.bool(forKey: "fadeEntireOverlay")
+        fadeEntireSubtitles = defaults.bool(forKey: "fadeEntireSubtitles")
         voiceSubtitleSize = VoiceSubtitleStyle.fontSize(defaults.object(forKey: "voiceSubtitleSize") as? Double ?? 28)
         voiceSubtitleOpacity = OverlayLayout.opacity(defaults.object(forKey: "voiceSubtitleOpacity") as? Double ?? 0.9)
         voiceSource = TranslationLanguage(rawValue: defaults.string(forKey: "voiceSource") ?? "") ?? .english

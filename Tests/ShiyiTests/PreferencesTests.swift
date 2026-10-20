@@ -8,12 +8,18 @@ final class PreferencesTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let preferences = Preferences(defaults: defaults, keychain: MemoryKeychain(""))
+        XCTAssertFalse(preferences.fadeEntireSubtitles)
+        XCTAssertFalse(preferences.fadeEntireOverlay)
+        preferences.fadeEntireSubtitles = true
+        preferences.fadeEntireOverlay = true
         preferences.voiceSubtitleSize = 36
         preferences.voiceSubtitleOpacity = 0.55
         preferences.voiceSource = .german
         preferences.voiceTarget = .english
         preferences.voiceShortcut = .controlShiftR
         let restored = Preferences(defaults: defaults, keychain: MemoryKeychain(""))
+        XCTAssertTrue(restored.fadeEntireSubtitles)
+        XCTAssertTrue(restored.fadeEntireOverlay)
         XCTAssertEqual(restored.voiceSubtitleSize, 36)
         XCTAssertEqual(restored.voiceSubtitleOpacity, 0.55)
         XCTAssertEqual(restored.voiceSource, .german)

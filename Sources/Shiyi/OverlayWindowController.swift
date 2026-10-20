@@ -14,6 +14,19 @@ private final class OperationPointButton: NSButton {
     var onDrag: ((CGPoint, CGPoint) -> Void)?
     var onDragStart: (() -> Void)?
     private var lastScroll: TimeInterval = 0
+    private var hoverArea: NSTrackingArea?
+    override var isHighlighted: Bool { didSet { layer?.opacity = isHighlighted ? 0.8 : 1 } }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
+        addTrackingArea(area); hoverArea = area
+    }
+    override func mouseEntered(with event: NSEvent) {
+        layer?.borderColor = NSColor.white.withAlphaComponent(0.7).cgColor; layer?.borderWidth = 2
+    }
+    override func mouseExited(with event: NSEvent) { layer?.borderWidth = 0 }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func menu(for event: NSEvent) -> NSMenu? { contextMenuProvider?() }
     override func mouseDown(with event: NSEvent) {
@@ -70,7 +83,9 @@ final class OverlayWindowController: NSObject {
         button.imagePosition = .imageOnly
         button.contentTintColor = .white
         button.wantsLayer = true
-        button.layer?.backgroundColor = NSColor(calibratedRed: 0.38, green: 0.38, blue: 0.80, alpha: 1).cgColor
+        button.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+        button.setAccessibilityLabel("展开或收起译文")
+        button.setAccessibilityHelp("按住拖动；右键复制或重试；滚动浏览长译文。")
         button.layer?.cornerRadius = 18
         button.toolTip = "点击展开或收起；拖动改变位置；右键复制、重试；滚动浏览长译文"
         button.contextMenuProvider = { [weak self] in self?.makeMenu() ?? NSMenu() }
@@ -82,12 +97,15 @@ final class OverlayWindowController: NSObject {
         Publishers.CombineLatest4(store.preferences.$overlayOpacity, store.preferences.$overlayHorizontal,
                                   store.preferences.$overlayVertical, store.preferences.$overlayScreenID)
             .receive(on: DispatchQueue.main).sink { [weak self] _ in self?.layout() }.store(in: &observers)
+        store.preferences.$fadeEntireOverlay.receive(on: DispatchQueue.main).sink { [weak self] _ in self?.layout() }.store(in: &observers)
         store.$isOverlayExpanded.receive(on: DispatchQueue.main).sink { [weak self] _ in self?.layout() }.store(in: &observers)
         store.$isPreparingSystemLanguages.receive(on: DispatchQueue.main).sink { [weak self] preparing in
             // Only the OS language-download sheet may temporarily receive normal input.
             self?.panel.allowsSystemInteraction = preparing
             self?.panel.ignoresMouseEvents = !preparing
         }.store(in: &observers)
+        NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification)
+            .receive(on: DispatchQueue.main).sink { [weak self] _ in self?.layout() }.store(in: &observers)
         NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
             .receive(on: DispatchQueue.main).sink { [weak self] _ in
                 self?.updateDisplays()
@@ -151,7 +169,7 @@ final class OverlayWindowController: NSObject {
         if store.overlayWidth != result.contentFrame.width { store.overlayWidth = result.contentFrame.width }
         if store.overlayHeight != result.contentFrame.height { store.overlayHeight = result.contentFrame.height }
         panel.setFrame(result.contentFrame, display: true)
-        panel.alphaValue = OverlayLayout.opacity(store.preferences.overlayOpacity)
+        panel.alphaValue = store.preferences.fadeEntireOverlay && !NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency ? OverlayLayout.opacity(store.preferences.overlayOpacity) : 1
         operationPanel.setFrame(result.controlFrame, display: true)
         operationPanel.alphaValue = 1
         button.image = NSImage(systemSymbolName: store.isOverlayExpanded ? "chevron.up" : "chevron.down", accessibilityDescription: nil)

@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 struct VoiceTranscriptSession: Codable, Identifiable, Equatable {
     var id = UUID()
     var schemaVersion = 1
+    var name: String?
     var startedAt = Date()
     var endedAt: Date?
     var source: TranslationLanguage
@@ -15,11 +16,17 @@ struct VoiceTranscriptSession: Codable, Identifiable, Equatable {
         if let index = captions.firstIndex(where: { $0.id == caption.id }) { captions[index] = caption }
         else { captions.append(caption) }
     }
+    var displayName: String { name?.isEmpty == false ? name! : "语音翻译" }
+    func matches(_ query: String) -> Bool {
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty || [displayName, source.title, target.title].contains { $0.localizedStandardContains(text) }
+            || captions.contains { $0.original.localizedStandardContains(text) || $0.translation.localizedStandardContains(text) }
+    }
     var markdown: String {
         let date = DateFormatter()
         date.dateStyle = .medium; date.timeStyle = .medium
         let clock = DateFormatter(); clock.dateFormat = "HH:mm:ss"
-        var lines = ["# 拾译 · 语音翻译记录", "", "- 开始：\(date.string(from: startedAt))",
+        var lines = ["# 拾译 · \(name ?? "语音翻译记录")", "", "- 开始：\(date.string(from: startedAt))",
                      "- 语言：\(source.title) → \(target.title)", "- 语段：\(captions.count)"]
         if let endedAt { lines.append("- 结束：\(date.string(from: endedAt))") }
         for (index, caption) in captions.enumerated() {
@@ -33,15 +40,17 @@ struct VoiceTranscriptSession: Codable, Identifiable, Equatable {
 struct VoiceTranscriptSummary: Identifiable, Equatable {
     let id: UUID
     let startedAt: Date
+    let name: String?
+    let endedAt: Date?
     let source: TranslationLanguage
     let target: TranslationLanguage
     let count: Int
     var title: String {
         let date = DateFormatter(); date.dateFormat = "MM-dd HH:mm"
-        return "\(date.string(from: startedAt)) · \(source.title) → \(target.title) · \(count) 段"
+        return "\(name.map { $0 + " · " } ?? "")\(date.string(from: startedAt)) · \(source.title) → \(target.title) · \(count) 段"
     }
     init(_ session: VoiceTranscriptSession) {
-        id = session.id; startedAt = session.startedAt; source = session.source; target = session.target; count = session.captions.count
+        id = session.id; startedAt = session.startedAt; name = session.name; endedAt = session.endedAt; source = session.source; target = session.target; count = session.captions.count
     }
 }
 
@@ -135,6 +144,13 @@ final class VoiceTranscriptArchive: ObservableObject {
                 } catch { continuation.resume(throwing: VoiceModelError(message: "记录无法读取，请检查文件是否仍在保存文件夹中。")) }
             }
         }
+    }
+    func rename(_ id: UUID, to name: String) async throws {
+        var session = try await load(id)
+        let clean = name.components(separatedBy: .newlines).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        session.name = clean.isEmpty ? nil : String(clean.prefix(120))
+        active[id] = session
+        persist(session)
     }
     func showFolder() {
         guard let directory else { return }
