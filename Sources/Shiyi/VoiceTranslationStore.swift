@@ -1,9 +1,10 @@
 import AppKit
 import Combine
 
-struct VoiceCaption: Identifiable, Equatable {
+struct VoiceCaption: Identifiable, Equatable, Codable {
     let id: UUID
     var original: String
+    var recordedAt = Date()
     var translation = ""
     var failure: String?
 }
@@ -34,6 +35,9 @@ struct VoiceTranslationQueue {
 final class VoiceTranslationStore: ObservableObject {
     let preferences: Preferences
     let model = LocalVoiceModel()
+    let archive: VoiceTranscriptArchive
+    private var sessionID: UUID?
+    private var captionSessions: [UUID: UUID] = [:]
     @Published private(set) var listening = false
     @Published private(set) var starting = false
     @Published private(set) var liveOriginal = ""
@@ -60,12 +64,14 @@ final class VoiceTranslationStore: ObservableObject {
     private var lastLevelUpdate: TimeInterval = 0
 
     init(preferences: Preferences,
+         archive: VoiceTranscriptArchive? = nil,
          recognizerFactory: @escaping @MainActor () -> any VoiceRecognizing = { makeVoiceRecognizer() },
          modelReady: (() -> Bool)? = nil,
          translate: @escaping (String, TranslationLanguage, TranslationLanguage) async throws -> String = {
              try await LocalVoiceClient().translate($0, source: $1, target: $2)
          }) {
         self.preferences = preferences
+        self.archive = archive ?? VoiceTranscriptArchive()
         self.recognizerFactory = recognizerFactory
         self.modelReady = modelReady
         self.translateText = translate
@@ -80,6 +86,7 @@ final class VoiceTranslationStore: ObservableObject {
         guard !starting, !listening else { return }
         guard modelReady?() ?? model.ready else { error = "请先在主窗口 → 语音翻译中准备免费模型。"; return }
         error = nil
+        sessionID = archive.begin(source: preferences.voiceSource, target: preferences.voiceTarget)
         starting = true
         status = "准备语音识别与麦克风…"
         liveOriginal = ""
@@ -124,6 +131,15 @@ final class VoiceTranslationStore: ObservableObject {
     }
 
     func stop(cancelPending: Bool = false) {
+        if cancelPending, !liveOriginal.isEmpty, let sessionID {
+            var draft = captions.first(where: { $0.id == draftID }) ?? VoiceCaption(id: draftID, original: liveOriginal)
+            if draft.original != liveOriginal { draft.translation = "" }
+            draft.original = liveOriginal
+            if let index = captions.firstIndex(where: { $0.id == draftID }) { captions[index] = draft }
+            if draft.translation.isEmpty { draft.failure = "收听结束，尚未翻译" }
+            captionSessions[draftID] = sessionID
+            archive.record(draft, sessionID: sessionID)
+        }
         if !cancelPending, !liveOriginal.isEmpty { submit(liveOriginal, id: draftID) }
         microphoneGeneration = UUID()
         startTask?.cancel(); startTask = nil
@@ -136,12 +152,18 @@ final class VoiceTranslationStore: ObservableObject {
             worker?.cancel(); worker = nil; activeRequest = nil; queue.clear()
             for index in captions.indices where captions[index].translation.isEmpty && captions[index].failure == nil {
                 captions[index].failure = "已取消"
+                saveCaption(captions[index])
             }
             if modelReady == nil { model.unload() }
         }
+        if let sessionID { archive.end(sessionID) }
     }
 
     func clear() {
+        for var caption in captions where caption.translation.isEmpty && caption.failure == nil {
+            caption.failure = "屏幕字幕已清空，未完成翻译"
+            saveCaption(caption)
+        }
         translationGeneration = UUID()
         worker?.cancel(); worker = nil; activeRequest = nil; queue.clear()
         debounce?.cancel(); debounce = nil
@@ -152,6 +174,7 @@ final class VoiceTranslationStore: ObservableObject {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         guard text.count <= 1200 else {
+            liveOriginal = text
             stop(cancelPending: true)
             error = "连续语句过长，已停止收音；请分句说话后重新开始，避免截断译文。"
             return
@@ -176,7 +199,11 @@ final class VoiceTranslationStore: ObservableObject {
         if let existing = captions.first(where: { $0.id == id }), existing.original == text,
            !existing.translation.isEmpty || queue.requests.contains(where: { $0.id == id && $0.text == text }) { return }
         guard queue.enqueue(VoiceTranslationRequest(id: id, text: text)) else {
-            // Stop input explicitly rather than losing any pending sentence.
+            // Preserve the untranslated final phrase before pausing input.
+            if let sessionID {
+                archive.record(VoiceCaption(id: id, original: text, failure: "翻译排队过多，未完成翻译"), sessionID: sessionID)
+                archive.end(sessionID)
+            }
             microphoneGeneration = UUID()
             recognizer?.stop(); recognizer = nil
             debounce?.cancel(); startTask?.cancel()
@@ -191,11 +218,17 @@ final class VoiceTranslationStore: ObservableObject {
         } else {
             captions.append(VoiceCaption(id: id, original: text))
         }
+        if let sessionID { captionSessions[id] = captionSessions[id] ?? sessionID }
+        if let caption = captions.first(where: { $0.id == id }) { saveCaption(caption) }
         // Keep pending rows; only evict completed history.
         while captions.count > 100, let first = captions.first, !first.translation.isEmpty || first.failure != nil {
             captions.removeFirst()
         }
         runQueue()
+    }
+
+    private func saveCaption(_ caption: VoiceCaption) {
+        if let session = captionSessions[caption.id] { archive.record(caption, sessionID: session) }
     }
 
     private func runQueue() {
@@ -211,11 +244,13 @@ final class VoiceTranslationStore: ObservableObject {
                     guard !Task.isCancelled, generation == self.translationGeneration else { return }
                     if let index = self.captions.firstIndex(where: { $0.id == request.id && $0.original == request.text }) {
                         self.captions[index].translation = output
+                        self.saveCaption(self.captions[index])
                     }
                 } catch {
                     guard !Task.isCancelled, generation == self.translationGeneration else { return }
                     if let index = self.captions.firstIndex(where: { $0.id == request.id && $0.original == request.text }) {
                         self.captions[index].failure = error.localizedDescription
+                        self.saveCaption(self.captions[index])
                     }
                 }
             }

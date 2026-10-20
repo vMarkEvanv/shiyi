@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import Carbon
 import Combine
+import QuartzCore
 
 // Kept independent from the text-overlay shortcut and the temporary copy key.
 enum VoiceShortcut: String, CaseIterable, Identifiable {
@@ -63,56 +64,123 @@ enum VoiceSubtitleStyle {
 private final class NativeSubtitleSurface: NSView {
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
-    private var original = NSAttributedString()
-    private var translation = NSAttributedString()
-    private var originalHeight: CGFloat = 0
-    private var translationHeight: CGFloat = 0
-    private let padding: CGFloat = 24
+    private var bodyLayer: CALayer?
+    private var cueKey = ""
+    private var content = ""
+    private var cachedFont = 0.0
+    private var cachedWidth: CGFloat = 0
+    private var cachedHeight: CGFloat = 64
+    private var expired = false
+    private var forceReveal = false
+    private var expiry: DispatchWorkItem?
     private(set) var dragging = false
     var onDragEnded: (() -> Void)?
 
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.isGeometryFlipped = true
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with event: NSEvent) {
+        bodyLayer?.removeAllAnimations()
+        layer?.sublayers?.filter { $0 !== bodyLayer }.forEach { $0.removeFromSuperlayer() }
         dragging = true
         window?.performDrag(with: event)
         dragging = false
         onDragEnded?()
     }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .openHand) }
+    func reveal() { forceReveal = true }
 
-    func update(original: String, translation: String, fontSize: Double, width: CGFloat) -> CGFloat {
+    func update(original: String, translation: String, fontSize: Double, width: CGFloat,
+                key: String, lifetime: TimeInterval?) -> CGFloat {
+        let combined = original + "\n" + translation
+        let isNewCue = key != cueKey
+        let wasExpired = expired
+        let changedText = combined != content
+        guard isNewCue || changedText || forceReveal || cachedFont != fontSize || cachedWidth != width else { return cachedHeight }
         let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .center
-        paragraph.lineBreakMode = .byWordWrapping
-        paragraph.lineSpacing = 4
-        self.original = NSAttributedString(string: original, attributes: [
-            .font: NSFont.systemFont(ofSize: fontSize * 0.7, weight: .medium),
-            .foregroundColor: NSColor.white.withAlphaComponent(0.85), .paragraphStyle: paragraph
-        ])
-        self.translation = NSAttributedString(string: translation, attributes: [
-            .font: NSFont.systemFont(ofSize: fontSize, weight: .semibold),
-            .foregroundColor: NSColor.white, .paragraphStyle: paragraph
-        ])
-        let textWidth = max(1, width - padding * 2)
+        paragraph.alignment = .center; paragraph.lineBreakMode = .byWordWrapping; paragraph.lineSpacing = 4
+        let source = NSAttributedString(string: original, attributes: [.font: NSFont.systemFont(ofSize: fontSize * 0.7, weight: .medium),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.85), .paragraphStyle: paragraph])
+        let target = NSAttributedString(string: translation, attributes: [.font: NSFont.systemFont(ofSize: fontSize, weight: .semibold),
+            .foregroundColor: NSColor.white, .paragraphStyle: paragraph])
         let options: NSString.DrawingOptions = [.usesLineFragmentOrigin, .usesFontLeading]
-        originalHeight = original.isEmpty ? 0 : ceil(self.original.boundingRect(with: NSSize(width: textWidth, height: 10000), options: options).height)
-        translationHeight = translation.isEmpty ? 0 : ceil(self.translation.boundingRect(with: NSSize(width: textWidth, height: 10000), options: options).height)
-        setAccessibilityElement(true)
-        setAccessibilityRole(.staticText)
+        let textWidth = max(1, width - 48)
+        let sourceHeight = original.isEmpty ? 0 : ceil(source.boundingRect(with: NSSize(width: textWidth, height: 10000), options: options).height)
+        let targetHeight = translation.isEmpty ? 0 : ceil(target.boundingRect(with: NSSize(width: textWidth, height: 10000), options: options).height)
+        let gap: CGFloat = sourceHeight > 0 && targetHeight > 0 ? 10 : 0
+        let height = max(64, sourceHeight + targetHeight + gap + 36)
+        let image = NSImage(size: NSSize(width: width, height: height))
+        image.lockFocusFlipped(true)
+        if !original.isEmpty || !translation.isEmpty {
+            NSColor.black.withAlphaComponent(0.85).setFill()
+            NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: width, height: height), xRadius: 12, yRadius: 12).fill()
+            source.draw(with: NSRect(x: 24, y: 18, width: textWidth, height: sourceHeight + 2), options: options)
+            target.draw(with: NSRect(x: 24, y: 18 + sourceHeight + gap, width: textWidth, height: targetHeight + 2), options: options)
+        }
+        image.unlockFocus()
+        var imageRect = NSRect(x: 0, y: 0, width: width, height: height)
+        let next = CALayer()
+        next.frame = imageRect
+        next.contents = image.cgImage(forProposedRect: &imageRect, context: nil, hints: nil)
+        next.contentsScale = window?.backingScaleFactor ?? 2
+        let previous = bodyLayer
+        layer?.addSublayer(next)
+        bodyLayer = next
+        if isNewCue || changedText || forceReveal {
+            expired = false
+            expiry?.cancel()
+            if let lifetime, !original.isEmpty {
+                let expectedKey = key
+                let timer = DispatchWorkItem { [weak self] in
+                    guard let self, self.cueKey == expectedKey else { return }
+                    self.dismissUp()
+                }
+                expiry = timer
+                DispatchQueue.main.asyncAfter(deadline: .now() + lifetime, execute: timer)
+            }
+        }
+        let animate = isNewCue || forceReveal || (wasExpired && changedText)
+        next.opacity = expired ? 0 : 1
+        if !expired, !original.isEmpty, animate || changedText {
+            next.add(motion(entering: true, upward: animate), forKey: "subtitle-enter")
+        }
+        if let previous {
+            if animate, previous.opacity > 0 {
+                previous.add(motion(entering: false, upward: true), forKey: "subtitle-exit")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { previous.removeFromSuperlayer() }
+            } else { previous.removeFromSuperlayer() }
+        }
+        cueKey = key; content = combined; cachedFont = fontSize; cachedWidth = width; cachedHeight = height; forceReveal = false
+        setAccessibilityElement(true); setAccessibilityRole(.staticText)
         setAccessibilityLabel([original, translation].filter { !$0.isEmpty }.joined(separator: "\n"))
-        needsDisplay = true
-        return max(64, originalHeight + translationHeight + (originalHeight > 0 && translationHeight > 0 ? 10 : 0) + 36)
+        return height
     }
 
-    override func draw(_ dirtyRect: NSRect) {
-        guard original.length > 0 || translation.length > 0 else { return }
-        NSColor.black.withAlphaComponent(0.85).setFill()
-        NSBezierPath(roundedRect: bounds, xRadius: 12, yRadius: 12).fill()
-        let width = max(1, bounds.width - padding * 2)
-        let options: NSString.DrawingOptions = [.usesLineFragmentOrigin, .usesFontLeading]
-        original.draw(with: NSRect(x: padding, y: 18, width: width, height: originalHeight + 2), options: options)
-        translation.draw(with: NSRect(x: padding, y: 18 + originalHeight + (originalHeight > 0 && translationHeight > 0 ? 10 : 0),
-                                      width: width, height: translationHeight + 2), options: options)
+    private func motion(entering: Bool, upward: Bool) -> CAAnimationGroup {
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = entering ? 0 : 1; fade.toValue = entering ? 1 : 0
+        let slide = CABasicAnimation(keyPath: "transform.translation.y")
+        slide.fromValue = entering && upward && !reduceMotion ? 20 : 0
+        slide.toValue = !entering && upward && !reduceMotion ? -26 : 0
+        let group = CAAnimationGroup()
+        group.animations = [fade, slide]
+        group.duration = reduceMotion || !upward ? 0.18 : (entering ? 0.46 : 0.4)
+        group.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 0.75, 0.25, 1)
+        group.fillMode = .forwards; group.isRemovedOnCompletion = entering
+        return group
+    }
+    func dismissUp() {
+        expiry?.cancel(); expiry = nil
+        guard !expired else { return }
+        expired = true
+        bodyLayer?.opacity = 0
+        bodyLayer?.add(motion(entering: false, upward: true), forKey: "subtitle-exit")
+        setAccessibilityLabel("")
     }
 }
 
@@ -123,6 +191,8 @@ final class VoiceWindowController: NSObject, NSWindowDelegate {
     private let surface = NativeSubtitleSurface()
     private var observers = Set<AnyCancellable>()
     private var previewing = false
+    private var closing = false
+    private var hideTask: DispatchWorkItem?
     init(store: VoiceTranslationStore) {
         self.store = store
         let area = (NSScreen.screens.first ?? NSScreen.main)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
@@ -158,8 +228,10 @@ final class VoiceWindowController: NSObject, NSWindowDelegate {
         frame.size.width = min(frame.width, max(1, area.width - 24))
         let original = previewing ? "Good morning. The meeting starts at nine." : store.captions.last?.original ?? store.liveOriginal
         let translation = previewing ? "早上好。会议将于上午九点开始。" : store.captions.last?.translation ?? ""
+        let key = previewing ? "preview" : (store.captions.last?.id.uuidString ?? "live")
+        let lifetime: TimeInterval? = previewing ? nil : max(6, min(16, Double(max(original.count, translation.count)) * 0.10))
         let height = surface.update(original: original, translation: translation,
-                                    fontSize: VoiceSubtitleStyle.fontSize(store.preferences.voiceSubtitleSize), width: frame.width)
+                                    fontSize: VoiceSubtitleStyle.fontSize(store.preferences.voiceSubtitleSize), width: frame.width, key: key, lifetime: lifetime)
         frame.size.height = min(height, max(64, area.height - 24))
         if NSEvent.pressedMouseButtons == 0 {
             frame.origin.x = min(max(area.minX + 12, frame.minX), area.maxX - frame.width - 12)
@@ -169,13 +241,21 @@ final class VoiceWindowController: NSObject, NSWindowDelegate {
         window.alphaValue = OverlayLayout.opacity(store.preferences.voiceSubtitleOpacity)
         surface.needsDisplay = true
     }
-    func show() { previewing = false; render(); window.orderFrontRegardless() }
-    func preview() { previewing = true; render(); window.orderFrontRegardless() }
+    func show() { hideTask?.cancel(); closing = false; previewing = false; surface.reveal(); render(); window.orderFrontRegardless() }
+    func preview() { hideTask?.cancel(); closing = false; previewing = true; surface.reveal(); render(); window.orderFrontRegardless() }
     func toggle() {
-        if window.isVisible { close() }
+        if window.isVisible && !closing { close() }
         else { show(); store.start() }
     }
-    func close() { store.stop(cancelPending: true); window.orderOut(nil) }
+    func close() {
+        store.stop(cancelPending: true)
+        closing = true
+        surface.dismissUp()
+        hideTask?.cancel()
+        let task = DispatchWorkItem { [weak self] in self?.window.orderOut(nil); self?.closing = false }
+        hideTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.42, execute: task)
+    }
     func windowShouldClose(_ sender: NSWindow) -> Bool { store.stop(cancelPending: true); return true }
 }
 
@@ -245,6 +325,7 @@ struct VoiceSettingsView: View {
                 .font(.caption).foregroundStyle(ShiyiTheme.muted)
             Link("TranslateGemma 模型与许可", destination: URL(string: "https://ollama.com/library/translategemma:4b")!)
                 .font(.caption)
+            VoiceHistoryView(archive: store.archive)
         }.padding(20).background(.white.opacity(0.65)).clipShape(RoundedRectangle(cornerRadius: 16))
         .task { await model.refresh() }
     }

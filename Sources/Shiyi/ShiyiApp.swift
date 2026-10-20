@@ -184,6 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     func applicationWillTerminate(_ notification: Notification) {
         voiceStore.stop(cancelPending: true)
+        voiceStore.archive.flush()
         voiceStore.model.shutdown()
     }
 

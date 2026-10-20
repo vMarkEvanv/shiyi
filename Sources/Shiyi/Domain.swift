@@ -7,7 +7,7 @@ enum TranslationEngine: String, CaseIterable, Identifiable {
     var title: String { self == .system ? "系统翻译" : "AI 语境翻译" }
 }
 
-enum TranslationLanguage: String, CaseIterable, Identifiable {
+enum TranslationLanguage: String, CaseIterable, Identifiable, Codable {
     case simplifiedChinese = "zh-Hans"
     case english = "en"
     case german = "de"

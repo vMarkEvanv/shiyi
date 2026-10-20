@@ -47,7 +47,7 @@ final class VoiceLifecycleTests: XCTestCase {
         let recognizer = FakeVoiceRecognizer()
         let requested = expectation(description: "translation began")
         var continuation: CheckedContinuation<String, Never>?
-        let store = VoiceTranslationStore(preferences: Preferences(defaults: defaults, keychain: VoiceTestKeys()), recognizerFactory: { recognizer }, modelReady: { true }) { _, _, _ in
+        let store = VoiceTranslationStore(preferences: Preferences(defaults: defaults, keychain: VoiceTestKeys()), archive: VoiceTranscriptArchive(directory: nil), recognizerFactory: { recognizer }, modelReady: { true }) { _, _, _ in
             requested.fulfill()
             return await withCheckedContinuation { continuation = $0 }
         }
@@ -75,7 +75,7 @@ final class VoiceLifecycleTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let preferences = Preferences(defaults: defaults, keychain: VoiceTestKeys())
         let recognizer = FakeVoiceRecognizer()
-        let store = VoiceTranslationStore(preferences: preferences, recognizerFactory: { recognizer }, modelReady: { true }) { text, _, _ in text }
+        let store = VoiceTranslationStore(preferences: preferences, archive: VoiceTranscriptArchive(directory: nil), recognizerFactory: { recognizer }, modelReady: { true }) { text, _, _ in text }
         store.start()
         for _ in 0..<20 where !store.listening { await Task.yield() }
         recognizer.text?("First sentence.", true)
@@ -86,4 +86,49 @@ final class VoiceLifecycleTests: XCTestCase {
         XCTAssertTrue(recognizer.stopped)
         XCTAssertEqual(preferences.target, .simplifiedChinese)
     }
+    @MainActor
+    func testClearScreenDoesNotDeleteArchivedTranslation() async throws {
+        let suite = "ShiyiTests.voiceClear.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let recognizer = FakeVoiceRecognizer()
+        let archive = VoiceTranscriptArchive(directory: nil)
+        let store = VoiceTranslationStore(preferences: Preferences(defaults: defaults, keychain: VoiceTestKeys()), archive: archive,
+                                          recognizerFactory: { recognizer }, modelReady: { true }) { _, _, _ in "你好" }
+        store.start()
+        for _ in 0..<30 where !store.listening { await Task.yield() }
+        recognizer.text?("Hello", true)
+        for _ in 0..<30 where store.captions.first?.translation.isEmpty ?? true { await Task.yield() }
+        let id = try XCTUnwrap(archive.sessions.first?.id)
+        store.clear()
+        store.stop(cancelPending: true)
+        XCTAssertTrue(store.captions.isEmpty)
+        let saved = try await archive.load(id)
+        XCTAssertEqual(saved.captions.count, 1)
+        XCTAssertEqual(saved.captions.first?.translation, "你好")
+    }
+    @MainActor
+    func testClosingPreservesUnfinishedRecognitionWithoutStartingTranslation() async throws {
+        let suite = "ShiyiTests.voiceDraft.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let recognizer = FakeVoiceRecognizer()
+        let archive = VoiceTranscriptArchive(directory: nil)
+        let store = VoiceTranslationStore(preferences: Preferences(defaults: defaults, keychain: VoiceTestKeys()), archive: archive,
+                                          recognizerFactory: { recognizer }, modelReady: { true }) { _, _, _ in
+            XCTFail("Closing should not start a new translation")
+            return ""
+        }
+        store.start()
+        for _ in 0..<30 where !store.listening { await Task.yield() }
+        recognizer.text?("unfinished original", false)
+        store.stop(cancelPending: true)
+        let id = try XCTUnwrap(archive.sessions.first?.id)
+        let saved = try await archive.load(id)
+        XCTAssertEqual(saved.captions.first?.original, "unfinished original")
+        XCTAssertTrue(saved.captions.first?.translation.isEmpty ?? false)
+        XCTAssertNotNil(saved.captions.first?.failure)
+        XCTAssertNotNil(saved.endedAt)
+    }
+
 }
