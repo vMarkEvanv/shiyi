@@ -58,11 +58,71 @@ enum VoiceSubtitleStyle {
     static func fontSize(_ value: Double) -> Double { value.isFinite ? min(56, max(16, value)) : 28 }
 }
 
+/// A native surface owns both sizing and dragging, avoiding SwiftUI hit testing
+/// and proposed-height feedback in a borderless non-key window.
+private final class NativeSubtitleSurface: NSView {
+    override var isFlipped: Bool { true }
+    override var isOpaque: Bool { false }
+    private var original = NSAttributedString()
+    private var translation = NSAttributedString()
+    private var originalHeight: CGFloat = 0
+    private var translationHeight: CGFloat = 0
+    private let padding: CGFloat = 24
+    private(set) var dragging = false
+    var onDragEnded: (() -> Void)?
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseDown(with event: NSEvent) {
+        dragging = true
+        window?.performDrag(with: event)
+        dragging = false
+        onDragEnded?()
+    }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .openHand) }
+
+    func update(original: String, translation: String, fontSize: Double, width: CGFloat) -> CGFloat {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.lineBreakMode = .byWordWrapping
+        paragraph.lineSpacing = 4
+        self.original = NSAttributedString(string: original, attributes: [
+            .font: NSFont.systemFont(ofSize: fontSize * 0.7, weight: .medium),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.85), .paragraphStyle: paragraph
+        ])
+        self.translation = NSAttributedString(string: translation, attributes: [
+            .font: NSFont.systemFont(ofSize: fontSize, weight: .semibold),
+            .foregroundColor: NSColor.white, .paragraphStyle: paragraph
+        ])
+        let textWidth = max(1, width - padding * 2)
+        let options: NSString.DrawingOptions = [.usesLineFragmentOrigin, .usesFontLeading]
+        originalHeight = original.isEmpty ? 0 : ceil(self.original.boundingRect(with: NSSize(width: textWidth, height: 10000), options: options).height)
+        translationHeight = translation.isEmpty ? 0 : ceil(self.translation.boundingRect(with: NSSize(width: textWidth, height: 10000), options: options).height)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+        setAccessibilityLabel([original, translation].filter { !$0.isEmpty }.joined(separator: "\n"))
+        needsDisplay = true
+        return max(64, originalHeight + translationHeight + (originalHeight > 0 && translationHeight > 0 ? 10 : 0) + 36)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard original.length > 0 || translation.length > 0 else { return }
+        NSColor.black.withAlphaComponent(0.85).setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: 12, yRadius: 12).fill()
+        let width = max(1, bounds.width - padding * 2)
+        let options: NSString.DrawingOptions = [.usesLineFragmentOrigin, .usesFontLeading]
+        original.draw(with: NSRect(x: padding, y: 18, width: width, height: originalHeight + 2), options: options)
+        translation.draw(with: NSRect(x: padding, y: 18 + originalHeight + (originalHeight > 0 && translationHeight > 0 ? 10 : 0),
+                                      width: width, height: translationHeight + 2), options: options)
+    }
+}
+
 @MainActor
 final class VoiceWindowController: NSObject, NSWindowDelegate {
     private let store: VoiceTranslationStore
     private let window: OverlayPanel
+    private let surface = NativeSubtitleSurface()
     private var observers = Set<AnyCancellable>()
+    private var previewing = false
     init(store: VoiceTranslationStore) {
         self.store = store
         let area = (NSScreen.screens.first ?? NSScreen.main)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
@@ -79,73 +139,44 @@ final class VoiceWindowController: NSObject, NSWindowDelegate {
         window.backgroundColor = .clear
         window.hasShadow = false
         window.isMovable = true
-        window.isMovableByWindowBackground = true
-        window.contentViewController = NSHostingController(rootView: VoiceSubtitleView(store: store, heightChanged: { [weak self] in self?.fitHeight($0) }))
+        window.ignoresMouseEvents = false
+        surface.onDragEnded = { [weak self] in self?.render() }
+        window.contentView = surface
         window.delegate = self
         window.setFrameAutosaveName("ShiyiVoiceSubtitles")
-        store.preferences.$voiceSubtitleOpacity.receive(on: DispatchQueue.main).sink { [weak self] value in
-            self?.window.alphaValue = OverlayLayout.opacity(value)
-        }.store(in: &observers)
+        Publishers.MergeMany([
+            store.preferences.$voiceSubtitleSize.map { _ in () }.eraseToAnyPublisher(),
+            store.preferences.$voiceSubtitleOpacity.map { _ in () }.eraseToAnyPublisher(),
+            store.$captions.map { _ in () }.eraseToAnyPublisher(),
+            store.$liveOriginal.map { _ in () }.eraseToAnyPublisher()
+        ]).receive(on: DispatchQueue.main).sink { [weak self] in self?.render() }.store(in: &observers)
     }
-    private func fitHeight(_ height: CGFloat) {
-        guard height.isFinite, height > 0 else { return }
+    private func render() {
+        guard !surface.dragging else { return }
         let area = window.screen?.visibleFrame ?? NSScreen.screens.first?.visibleFrame ?? window.frame
         var frame = window.frame
-        frame.size.height = min(max(70, height), area.height - 24)
-        frame.origin.x = min(max(area.minX + 12, frame.minX), area.maxX - frame.width - 12)
-        frame.origin.y = min(max(area.minY + 12, frame.minY), area.maxY - frame.height - 12)
-        if abs(window.frame.height - frame.height) > 1 || window.frame.origin != frame.origin { window.setFrame(frame, display: true) }
+        frame.size.width = min(frame.width, max(1, area.width - 24))
+        let original = previewing ? "Good morning. The meeting starts at nine." : store.captions.last?.original ?? store.liveOriginal
+        let translation = previewing ? "早上好。会议将于上午九点开始。" : store.captions.last?.translation ?? ""
+        let height = surface.update(original: original, translation: translation,
+                                    fontSize: VoiceSubtitleStyle.fontSize(store.preferences.voiceSubtitleSize), width: frame.width)
+        frame.size.height = min(height, max(64, area.height - 24))
+        if NSEvent.pressedMouseButtons == 0 {
+            frame.origin.x = min(max(area.minX + 12, frame.minX), area.maxX - frame.width - 12)
+            frame.origin.y = min(max(area.minY + 12, frame.minY), area.maxY - frame.height - 12)
+        }
+        window.setFrame(frame, display: true)
+        window.alphaValue = OverlayLayout.opacity(store.preferences.voiceSubtitleOpacity)
+        surface.needsDisplay = true
     }
-    func show() { window.orderFrontRegardless() }
+    func show() { previewing = false; render(); window.orderFrontRegardless() }
+    func preview() { previewing = true; render(); window.orderFrontRegardless() }
     func toggle() {
         if window.isVisible { close() }
         else { show(); store.start() }
     }
     func close() { store.stop(cancelPending: true); window.orderOut(nil) }
     func windowShouldClose(_ sender: NSWindow) -> Bool { store.stop(cancelPending: true); return true }
-}
-
-private struct SubtitleHeight: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
-
-/// Only source text and its matching translation belong in the subtitle surface.
-private struct VoiceSubtitleView: View {
-    @ObservedObject var store: VoiceTranslationStore
-    @ObservedObject private var preferences: Preferences
-    let heightChanged: (CGFloat) -> Void
-    init(store: VoiceTranslationStore, heightChanged: @escaping (CGFloat) -> Void) {
-        self.store = store; preferences = store.preferences; self.heightChanged = heightChanged
-    }
-    private var original: String { store.captions.last?.original ?? store.liveOriginal }
-    private var translation: String { store.captions.last?.translation ?? "" }
-    var body: some View {
-        VStack(spacing: 10) {
-            if !original.isEmpty {
-                Text(original)
-                    .font(.system(size: VoiceSubtitleStyle.fontSize(preferences.voiceSubtitleSize) * 0.7, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if !translation.isEmpty {
-                Text(translation)
-                    .font(.system(size: VoiceSubtitleStyle.fontSize(preferences.voiceSubtitleSize), weight: .semibold))
-                    .foregroundStyle(.white)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .multilineTextAlignment(.center)
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 24).padding(.vertical, 18)
-        .background(RoundedRectangle(cornerRadius: 12).fill(.black.opacity(original.isEmpty && translation.isEmpty ? 0 : 0.85)))
-        .background(GeometryReader { geometry in Color.clear.preference(key: SubtitleHeight.self, value: geometry.size.height) })
-        .onPreferenceChange(SubtitleHeight.self) { height in
-            DispatchQueue.main.async { heightChanged(height) }
-        }
-        .frame(maxHeight: .infinity, alignment: .bottom)
-        .allowsHitTesting(false)
-    }
 }
 
 struct VoiceSettingsView: View {
@@ -177,6 +208,7 @@ struct VoiceSettingsView: View {
                     else { store.onShowWindow?(); store.start() }
                 }.buttonStyle(.borderedProminent)
                 Button("显示字幕") { store.onShowWindow?() }
+                Button("预览字幕样式") { store.onPreviewWindow?() }
                 Button("清空字幕") { store.clear() }
             }
             Text(store.status).font(.callout).foregroundStyle(ShiyiTheme.muted)

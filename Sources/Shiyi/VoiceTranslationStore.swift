@@ -43,6 +43,7 @@ final class VoiceTranslationStore: ObservableObject {
     @Published var error: String?
     @Published var shortcutError: String?
     var onShowWindow: (() -> Void)?
+    var onPreviewWindow: (() -> Void)?
     private var recognizer: (any VoiceRecognizing)?
     private var startTask: Task<Void, Never>?
     private var debounce: Task<Void, Never>?

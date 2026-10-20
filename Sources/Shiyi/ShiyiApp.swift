@@ -31,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         _ = overlay
         installStatusItem()
         voiceStore.onShowWindow = { [weak self] in self?.voiceWindow.show() }
+        voiceStore.onPreviewWindow = { [weak self] in self?.voiceWindow.preview() }
         voiceHotKey.onPress = { [weak self] in self?.voiceWindow.toggle() }
         Task { [weak self] in await self?.voiceStore.model.refresh() }
         configureVoiceShortcut(store.preferences.voiceShortcut)

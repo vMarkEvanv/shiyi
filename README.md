@@ -119,3 +119,5 @@ Windows 应用放在 `platforms/windows/`，平台 UI、选区读取、凭据存
 可选的本地音频集成检查：先准备模型，用 `say -v Samantha -o build/voice-fixture.aiff 'Good morning. The meeting starts at nine.'` 生成测试语音，再运行 `SHIYI_VOICE_TEST_FILE="$PWD/build/voice-fixture.aiff" ./scripts/test.sh --filter VoiceAudioIntegrationTests`。普通测试不下载模型、不使用麦克风。
 
 字幕样式：语音字幕无标题栏和按钮，只显示原文与对应译文；可拖动位置。在主窗口“语音翻译”调整字号（16–56 pt）及透明度（0%–80%），即时生效并保存；启动/停止、状态和错误提示也集中在主窗口。
+
+可以先点击主窗口“预览字幕样式”，用固定中英示例检查字号、透明度和拖动，无需开麦克风。
