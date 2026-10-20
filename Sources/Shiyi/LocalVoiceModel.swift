@@ -20,6 +20,38 @@ struct LocalVoiceClient {
         return "You are a professional \(from) (\(source.rawValue)) to \(to) (\(target.rawValue)) translator. Your goal is to accurately convey the meaning and nuances of the original \(from) text while adhering to \(to) grammar, vocabulary, and cultural sensitivities.\nProduce only the \(to) translation, without any additional explanations or commentary. Please translate the following \(from) text into \(to):\n\n\n\(text)"
     }
 
+    func translateStreaming(_ text: String, source: TranslationLanguage, target: TranslationLanguage,
+                            onUpdate: @escaping @MainActor (String) -> Void) async throws -> String {
+        if source == target { await onUpdate(text); return text }
+        var request = URLRequest(url: Self.base.appendingPathComponent("api/chat"))
+        request.httpMethod = "POST"; request.timeoutInterval = 90
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "model": Self.model, "stream": true, "keep_alive": "10m",
+            "messages": [["role": "user", "content": Self.prompt(text, source: source, target: target)]],
+            "options": ["temperature": 0, "num_ctx": 2048, "num_predict": 384]
+        ])
+        let (bytes, response) = try await session.bytes(for: request, delegate: VoiceNoRedirects())
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw VoiceModelError(message: "本地翻译模型未返回结果，请在主窗口检查模型状态。")
+        }
+        var decoder = VoiceTranslationStream()
+        var lastUpdate = ProcessInfo.processInfo.systemUptime
+        var shown = false
+        for try await line in bytes.lines {
+            try Task.checkCancellation()
+            try decoder.append(line)
+            let now = ProcessInfo.processInfo.systemUptime
+            if !decoder.output.isEmpty, decoder.finished || (!shown && decoder.output.count >= 4) || (shown && now - lastUpdate >= 0.12) {
+                await onUpdate(decoder.output)
+                shown = true; lastUpdate = now
+            }
+            if decoder.finished { break }
+        }
+        try Task.checkCancellation()
+        return try decoder.completed()
+    }
+
     func translate(_ text: String, source: TranslationLanguage, target: TranslationLanguage) async throws -> String {
         if source == target { return text }
         var request = URLRequest(url: Self.base.appendingPathComponent("api/chat"))
@@ -27,7 +59,7 @@ struct LocalVoiceClient {
         request.timeoutInterval = 90
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: [
-            "model": Self.model, "stream": false, "keep_alive": "2m",
+            "model": Self.model, "stream": false, "keep_alive": "10m",
             "messages": [["role": "user", "content": Self.prompt(text, source: source, target: target)]],
             "options": ["temperature": 0, "num_ctx": 2048, "num_predict": 384]
         ])
@@ -49,6 +81,31 @@ struct LocalVoiceClient {
     }
 }
 
+/// Partial text is display-only until a successful terminal chunk arrives.
+struct VoiceTranslationStream {
+    private(set) var output = ""
+    private(set) var finished = false
+    mutating func append(_ line: String) throws {
+        guard !line.isEmpty else { return }
+        guard !finished, line.utf8.count < 65_536,
+              let data = line.data(using: .utf8),
+              let item = try JSONSerialization.jsonObject(with: data) as? [String: Any], item["error"] == nil else {
+            throw VoiceModelError(message: "本地翻译流中断，请重试。")
+        }
+        if item["done_reason"] as? String == "length" {
+            throw VoiceModelError(message: "本句译文达到长度上限，请分成更短的句子重试。")
+        }
+        output += (item["message"] as? [String: Any])?["content"] as? String ?? ""
+        guard output.utf8.count < 1_000_000 else { throw VoiceModelError(message: "本句译文过长，请分句重试。") }
+        finished = item["done"] as? Bool == true
+    }
+    func completed() throws -> String {
+        let result = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard finished, !result.isEmpty else { throw VoiceModelError(message: "本地翻译未完整结束，请重试。") }
+        return result
+    }
+}
+
 private final class VoiceNoRedirects: NSObject, URLSessionTaskDelegate {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
@@ -65,6 +122,8 @@ final class LocalVoiceModel: ObservableObject {
     private var process: Process?
     private var serverStartup: Task<Void, Error>?
     private var preparation: Task<Void, Never>?
+    private var residency: Task<Void, Never>?
+    private var unloadTask: Task<Void, Never>?
     static let version = "v0.40.6"
     static let runtimeHash = "b2b55434865a668decb494110d7fd970eed3ecc8837be2872f672ccbb95df974"
     static var root: URL {
@@ -126,6 +185,7 @@ final class LocalVoiceModel: ObservableObject {
     func cancelPreparation() { preparation?.cancel() }
     func shutdown() {
         preparation?.cancel()
+        residency?.cancel(); unloadTask?.cancel()
         serverStartup?.cancel()
         if let process, process.isRunning { process.terminate() }
         process = nil
@@ -137,18 +197,33 @@ final class LocalVoiceModel: ObservableObject {
         request.httpMethod = "POST"
         request.timeoutInterval = 120
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["model": LocalVoiceClient.model, "keep_alive": "2m", "stream": false,
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["model": LocalVoiceClient.model, "keep_alive": "10m", "stream": false,
                                                                         "options": ["num_ctx": 2048]])
         let (_, response) = try await URLSession.shared.data(for: request, delegate: VoiceNoRedirects())
         try Task.checkCancellation()
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw VoiceModelError(message: "本地翻译模型加载失败，请检查可用内存后重试。") }
     }
 
+    func retainWhileListening() {
+        unloadTask?.cancel(); unloadTask = nil
+        residency?.cancel()
+        residency = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds: 60_000_000_000) } catch { return }
+                guard !Task.isCancelled, let self else { return }
+                try? await self.warmUp()
+            }
+        }
+    }
     func unload() {
-        Task {
+        residency?.cancel(); residency = nil
+        unloadTask?.cancel()
+        unloadTask = Task {
+            do { try await Task.sleep(nanoseconds: 120_000_000_000) } catch { return }
+            guard !Task.isCancelled else { return }
             var request = URLRequest(url: LocalVoiceClient.base.appendingPathComponent("api/generate"))
-            request.httpMethod = "POST"
-            request.timeoutInterval = 5
+            request.httpMethod = "POST"; request.timeoutInterval = 5
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try? JSONSerialization.data(withJSONObject: ["model": LocalVoiceClient.model, "keep_alive": 0])
             _ = try? await URLSession.shared.data(for: request, delegate: VoiceNoRedirects())
         }

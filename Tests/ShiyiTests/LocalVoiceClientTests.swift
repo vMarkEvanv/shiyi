@@ -68,4 +68,28 @@ final class LocalVoiceClientTests: XCTestCase {
             } catch { XCTAssertFalse(error.localizedDescription.contains("PRIVATE_SPOKEN_TEXT")) }
         }
     }
+    @MainActor
+    func testStreamingUsesLoopbackAndPublishesBeforeCompletion() async throws {
+        VoiceHTTPStub.response = (200, Data((#"{"message":{"content":"早上好，"},"done":false}"# + "\n" + #"{"message":{"content":"会议九点开始。"},"done":true,"done_reason":"stop"}"# + "\n").utf8))
+        var updates: [String] = []
+        let result = try await client().translateStreaming("Good morning", source: .english, target: .simplifiedChinese) { updates.append($0) }
+        XCTAssertEqual(result, "早上好，会议九点开始。")
+        XCTAssertEqual(updates.first, "早上好，")
+        XCTAssertEqual(updates.last, result)
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(VoiceHTTPStub.lastBody)) as? [String: Any])
+        XCTAssertEqual(body["stream"] as? Bool, true)
+        XCTAssertEqual(body["keep_alive"] as? String, "10m")
+        XCTAssertEqual(VoiceHTTPStub.lastRequest?.url?.host, "127.0.0.1")
+    }
+    func testUnfinishedOrTruncatedStreamsCannotBecomeFinalRecords() throws {
+        var decoder = VoiceTranslationStream()
+        try decoder.append(#"{"message":{"content":"temporary"},"done":false}"#)
+        XCTAssertThrowsError(try decoder.completed())
+        XCTAssertThrowsError(try decoder.append(#"{"done":true,"done_reason":"length"}"#))
+        var broken = VoiceTranslationStream()
+        XCTAssertThrowsError(try broken.append(#"{"error":"PRIVATE_AUDIO_CONTENT"}"#)) { error in
+            XCTAssertFalse(error.localizedDescription.contains("PRIVATE_AUDIO_CONTENT"))
+        }
+    }
+
 }

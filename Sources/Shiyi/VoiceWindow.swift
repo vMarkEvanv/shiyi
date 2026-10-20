@@ -172,8 +172,8 @@ private final class NativeSubtitleSurface: NSView {
             backgroundLayer.removeAllAnimations()
             backgroundLayer.add(motion(entering: true, upward: false), forKey: "background-enter")
         }
-        if !expired, !original.isEmpty, animate || changedText {
-            next.add(motion(entering: true, upward: animate), forKey: "subtitle-enter")
+        if !expired, !original.isEmpty, animate {
+            next.add(motion(entering: true, upward: true), forKey: "subtitle-enter")
         }
         if let previous {
             if animate, previous.opacity > 0 {
@@ -251,7 +251,7 @@ final class VoiceWindowController: NSObject, NSWindowDelegate {
             store.preferences.$voiceSubtitleOpacity.map { _ in () }.eraseToAnyPublisher(),
             store.preferences.$fadeEntireSubtitles.map { _ in () }.eraseToAnyPublisher(),
             store.$captions.map { _ in () }.eraseToAnyPublisher(),
-            store.$liveOriginal.map { _ in () }.eraseToAnyPublisher()
+            store.$subtitleCaption.map { _ in () }.eraseToAnyPublisher()
         ]).receive(on: DispatchQueue.main).sink { [weak self] in self?.render() }.store(in: &observers)
     }
     private func render() {
@@ -259,7 +259,10 @@ final class VoiceWindowController: NSObject, NSWindowDelegate {
         let area = window.screen?.visibleFrame ?? NSScreen.screens.first?.visibleFrame ?? window.frame
         var frame = window.frame
         frame.size.width = min(frame.width, max(1, area.width - 24))
-        if !previewing { pair.update(store.captions) }
+        if !previewing {
+            pair.update(store.captions)
+            if let live = store.subtitleCaption { pair.update([live]) }
+        }
         let original = previewing ? "Good morning. The meeting starts at nine." : pair.caption?.original ?? ""
         let translation = previewing ? "早上好。会议将于上午九点开始。" : pair.caption?.translation ?? ""
         let key = previewing ? "preview" : (pair.caption?.id.uuidString ?? "empty")
@@ -329,7 +332,7 @@ struct VoiceSettingsView: View {
                     if let failure = store.captions.last?.failure {
                         Text("本句翻译未完成：\(failure)").font(.callout).foregroundStyle(.orange)
                     }
-                    Text("只收听麦克风，不采集电脑播放声音，不保存录音。")
+                    Text("只收听麦克风，不保存录音。稳定片段先显示，整段定稿保存在翻译记录。")
                         .font(.callout).foregroundStyle(ShiyiTheme.muted)
                 }.padding(12)
             } label: { Label("收听", systemImage: "mic") }
