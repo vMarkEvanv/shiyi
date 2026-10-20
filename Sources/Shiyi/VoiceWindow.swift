@@ -59,6 +59,15 @@ enum VoiceSubtitleStyle {
     static func fontSize(_ value: Double) -> Double { value.isFinite ? min(56, max(16, value)) : 28 }
 }
 
+struct VoiceSubtitlePairState {
+    private(set) var caption: VoiceCaption?
+    mutating func update(_ captions: [VoiceCaption]) {
+        guard !captions.isEmpty else { caption = nil; return }
+        guard let ready = captions.last(where: { !$0.original.isEmpty && !$0.translation.isEmpty }) else { return }
+        if caption == nil || ready.recordedAt >= caption!.recordedAt { caption = ready }
+    }
+}
+
 /// A native surface owns both sizing and dragging, avoiding SwiftUI hit testing
 /// and proposed-height feedback in a borderless non-key window.
 private final class NativeSubtitleSurface: NSView {
@@ -102,16 +111,20 @@ private final class NativeSubtitleSurface: NSView {
         let changedText = combined != content
         guard isNewCue || changedText || forceReveal || cachedFont != fontSize || cachedWidth != width else { return cachedHeight }
         let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .center; paragraph.lineBreakMode = .byWordWrapping; paragraph.lineSpacing = 4
-        let source = NSAttributedString(string: original, attributes: [.font: NSFont.systemFont(ofSize: fontSize * 0.7, weight: .medium),
+        paragraph.alignment = .center; paragraph.lineBreakMode = .byTruncatingTail
+        let sourceFont = NSFont.systemFont(ofSize: fontSize * 0.7, weight: .medium)
+        let targetFont = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
+        let source = NSAttributedString(string: original.components(separatedBy: .newlines).joined(separator: " "), attributes: [.font: sourceFont,
             .foregroundColor: NSColor.white.withAlphaComponent(0.85), .paragraphStyle: paragraph])
-        let target = NSAttributedString(string: translation, attributes: [.font: NSFont.systemFont(ofSize: fontSize, weight: .semibold),
+        let target = NSAttributedString(string: translation.components(separatedBy: .newlines).joined(separator: " "), attributes: [.font: targetFont,
             .foregroundColor: NSColor.white, .paragraphStyle: paragraph])
-        let options: NSString.DrawingOptions = [.usesLineFragmentOrigin, .usesFontLeading]
+        let options: NSString.DrawingOptions = [.usesLineFragmentOrigin, .usesFontLeading, .truncatesLastVisibleLine]
         let textWidth = max(1, width - 48)
-        let sourceHeight = original.isEmpty ? 0 : ceil(source.boundingRect(with: NSSize(width: textWidth, height: 10000), options: options).height)
-        let targetHeight = translation.isEmpty ? 0 : ceil(target.boundingRect(with: NSSize(width: textWidth, height: 10000), options: options).height)
-        let gap: CGFloat = sourceHeight > 0 && targetHeight > 0 ? 10 : 0
+        // Reserve exactly one source line and one translation line. The panel
+        // height changes only with font size, never when a translation arrives.
+        let sourceHeight = ceil(sourceFont.ascender - sourceFont.descender + sourceFont.leading + 4)
+        let targetHeight = ceil(targetFont.ascender - targetFont.descender + targetFont.leading + 4)
+        let gap: CGFloat = 10
         let height = max(64, sourceHeight + targetHeight + gap + 36)
         let image = NSImage(size: NSSize(width: width, height: height))
         image.lockFocusFlipped(true)
@@ -191,6 +204,7 @@ final class VoiceWindowController: NSObject, NSWindowDelegate {
     private let surface = NativeSubtitleSurface()
     private var observers = Set<AnyCancellable>()
     private var previewing = false
+    private var pair = VoiceSubtitlePairState()
     private var closing = false
     private var hideTask: DispatchWorkItem?
     init(store: VoiceTranslationStore) {
@@ -226,9 +240,10 @@ final class VoiceWindowController: NSObject, NSWindowDelegate {
         let area = window.screen?.visibleFrame ?? NSScreen.screens.first?.visibleFrame ?? window.frame
         var frame = window.frame
         frame.size.width = min(frame.width, max(1, area.width - 24))
-        let original = previewing ? "Good morning. The meeting starts at nine." : store.captions.last?.original ?? store.liveOriginal
-        let translation = previewing ? "早上好。会议将于上午九点开始。" : store.captions.last?.translation ?? ""
-        let key = previewing ? "preview" : (store.captions.last?.id.uuidString ?? "live")
+        if !previewing { pair.update(store.captions) }
+        let original = previewing ? "Good morning. The meeting starts at nine." : pair.caption?.original ?? ""
+        let translation = previewing ? "早上好。会议将于上午九点开始。" : pair.caption?.translation ?? ""
+        let key = previewing ? "preview" : (pair.caption?.id.uuidString ?? "empty")
         let lifetime: TimeInterval? = previewing ? nil : max(6, min(16, Double(max(original.count, translation.count)) * 0.10))
         let height = surface.update(original: original, translation: translation,
                                     fontSize: VoiceSubtitleStyle.fontSize(store.preferences.voiceSubtitleSize), width: frame.width, key: key, lifetime: lifetime)
@@ -308,7 +323,7 @@ struct VoiceSettingsView: View {
                     .accessibilityLabel("字幕透明度")
                 Text("\(Int(((1 - OverlayLayout.opacity(preferences.voiceSubtitleOpacity)) * 100).rounded()))%").monospacedDigit().frame(width: 52)
             }
-            Text("字幕只显示原文和对应译文，可按住拖动。大小和透明度即时生效并保存；所有操作与设置都在主窗口。")
+            Text("字幕固定为一行原文、一行译文，配对完成后整体切换。超长句在字幕里省略显示，保存记录保留全文。可按住拖动，大小和透明度即时生效。")
                 .font(.caption).foregroundStyle(ShiyiTheme.muted)
             Divider()
             Text("免费本地模型").font(.headline)
