@@ -5,7 +5,7 @@ import Speech
 @MainActor
 protocol VoiceRecognizing: AnyObject {
     func start(language: TranslationLanguage, onText: @escaping (String, Bool) -> Void,
-               onLevel: @escaping (Double) -> Void, onStatus: @escaping (String) -> Void,
+               onStatus: @escaping (String) -> Void,
                onError: @escaping (String) -> Void) async throws
     func stop()
 }
@@ -51,7 +51,7 @@ private final class ModernVoiceRecognizer: VoiceRecognizing {
     private var configurationObserver: NSObjectProtocol?
 
     func start(language: TranslationLanguage, onText: @escaping (String, Bool) -> Void,
-               onLevel: @escaping (Double) -> Void, onStatus: @escaping (String) -> Void,
+               onStatus: @escaping (String) -> Void,
                onError: @escaping (String) -> Void) async throws {
         guard let locale = await SpeechTranscriber.supportedLocale(equivalentTo: language.speechLocale) else {
             throw VoiceModelError(message: "本机语音模型暂不支持这个原文语言，请更换语言。")
@@ -111,11 +111,9 @@ private final class ModernVoiceRecognizer: VoiceRecognizing {
             do {
                 let converted = try conversion.convert(buffer)
                 guard converted.frameLength > 0 else { return }
-                let level = VoiceAudioConverter.level(buffer)
                 if case .dropped = streamContinuation.yield(AnalyzerInput(buffer: converted)) {
                     Task { @MainActor in onError("语音处理速度跟不上麦克风输入，已停止；请关闭其他占内存的软件后重试。") }
                 }
-                Task { @MainActor in onLevel(level) }
             } catch {
                 Task { @MainActor in onError("麦克风音频转换失败，请重新选择输入设备后重试。") }
             }
@@ -161,12 +159,7 @@ private final class VoiceAudioConverter: @unchecked Sendable {
         guard status != .error, failure == nil else { throw failure ?? VoiceModelError(message: "音频转换失败。") as NSError }
         return output
     }
-    static func level(_ source: AVAudioPCMBuffer) -> Double {
-        guard let values = source.floatChannelData?[0], source.frameLength > 0 else { return 0 }
-        var sum: Float = 0
-        for i in stride(from: 0, to: Int(source.frameLength), by: 8) { sum += values[i] * values[i] }
-        return min(1, Double(sqrt(sum / Float(max(1, Int(source.frameLength) / 8)))) * 5)
-    }
+
 }
 #endif
 
@@ -179,7 +172,7 @@ private final class LegacyVoiceRecognizer: VoiceRecognizing {
     private var request: SFSpeechAudioBufferRecognitionRequest?
 
     func start(language: TranslationLanguage, onText: @escaping (String, Bool) -> Void,
-               onLevel: @escaping (Double) -> Void, onStatus: @escaping (String) -> Void,
+               onStatus: @escaping (String) -> Void,
                onError: @escaping (String) -> Void) async throws {
         let authorization = await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }

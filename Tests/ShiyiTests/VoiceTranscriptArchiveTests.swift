@@ -90,4 +90,27 @@ final class VoiceTranscriptArchiveTests: XCTestCase {
         XCTAssertTrue(session.matches("  "))
     }
 
+    @MainActor
+    func testRapidDraftsCoalesceAndFlushKeepsLatestBeforeExit() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ShiyiCoalesceTests-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let archive = VoiceTranscriptArchive(directory: directory)
+        let id = archive.begin(source: .english, target: .simplifiedChinese)
+        let captionID = UUID()
+        for index in 0..<25 {
+            archive.record(VoiceCaption(id: captionID, original: "Draft \(index)"), sessionID: id)
+        }
+        XCTAssertEqual(archive.pendingWrites, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+        archive.flush()
+        let restarted = VoiceTranscriptArchive(directory: directory)
+        let draft = try await restarted.load(id)
+        XCTAssertEqual(draft.captions.first?.original, "Draft 24")
+        archive.record(VoiceCaption(id: captionID, original: "Final", translation: "完成"), sessionID: id)
+        archive.end(id); archive.flush()
+        let final = try await restarted.load(id)
+        XCTAssertEqual(final.captions.first?.translation, "完成")
+        XCTAssertNotNil(final.endedAt)
+    }
+
 }

@@ -9,3 +9,6 @@ dist/
 *.p8
 *.mobileprovision
 *.provisionprofile
+
+# Local one-click launcher
+/启动拾译.app

@@ -1,5 +1,7 @@
 import SwiftUI
 
+private struct VoiceHistorySearch: Hashable { let query: String; let revision: Int }
+
 struct VoiceHistoryView: View {
     @ObservedObject var archive: VoiceTranscriptArchive
     @State private var selected: UUID?
@@ -8,6 +10,7 @@ struct VoiceHistoryView: View {
     @State private var matches: Set<UUID>?
     @State private var searching = false
     @State private var searchToken = UUID()
+    @State private var searchRevision = 0
     @State private var readError: String?
     @State private var renaming = false
     @State private var name = ""
@@ -86,9 +89,17 @@ struct VoiceHistoryView: View {
         }
         .task { await archive.refresh(); if selected == nil { selected = archive.sessions.first?.id } }
         .task(id: selected) { await reload() }
-        .task(id: query) { await search() }
-        .onChange(of: archive.sessions) { _, _ in Task { await search() }; if selected == nil { selected = archive.sessions.first?.id } }
-        .onChange(of: archive.pendingWrites) { _, count in if count == 0 { Task { await reload(); await search() } } }
+        .task(id: VoiceHistorySearch(query: query, revision: searchRevision)) {
+            if !query.isEmpty {
+                do { try await Task.sleep(nanoseconds: 250_000_000) } catch { return }
+            }
+            await search()
+        }
+        .onChange(of: archive.sessions) { _, _ in searchRevision += 1; if selected == nil { selected = archive.sessions.first?.id } }
+        .onChange(of: archive.pendingWrites) { _, count in
+            if count == 0 { searchRevision += 1; Task { await reload() } }
+        }
+        .onDisappear { searchToken = UUID() }
         .sheet(isPresented: $renaming) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("重命名记录").font(.headline)

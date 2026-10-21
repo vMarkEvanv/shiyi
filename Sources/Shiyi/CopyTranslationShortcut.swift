@@ -36,7 +36,7 @@ final class CopyTranslationShortcut {
     init(preferences: Preferences) { self.preferences = preferences }
 
     func start() {
-        guard monitors.isEmpty else { return }
+        guard preferences.copyThenTranslate, monitors.isEmpty else { return }
         var type = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
         InstallEventHandler(GetApplicationEventTarget(), { _, event, data in
             guard let data, let event else { return OSStatus(eventNotHandledErr) }
@@ -58,6 +58,14 @@ final class CopyTranslationShortcut {
         }) { monitors.append(local) }
     }
 
+    func stop() {
+        cancel()
+        for monitor in monitors { NSEvent.removeMonitor(monitor) }
+        monitors.removeAll()
+        if let handler { RemoveEventHandler(handler) }
+        handler = nil; commandBaseline = nil; commandPID = nil
+    }
+
     func cancel() {
         timeout?.cancel()
         timeout = nil
@@ -69,6 +77,9 @@ final class CopyTranslationShortcut {
     private func observe(_ event: NSEvent) {
         guard event.cgEvent?.getIntegerValueField(.eventSourceUserData) != ClipboardSelectionReader.eventTag else { return }
         guard preferences.copyThenTranslate else { cancel(); return }
+        let isCopy = event.type == .keyDown && event.keyCode == UInt16(kVK_ANSI_C)
+            && event.modifierFlags.intersection([.command, .option, .control, .shift]) == .command
+        guard event.type == .flagsChanged || isCopy || sequence.baseline != nil else { return }
         let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
         if event.type == .flagsChanged {
             if event.modifierFlags.contains(.command), commandBaseline == nil || commandPID != pid {

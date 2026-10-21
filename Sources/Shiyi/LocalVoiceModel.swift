@@ -119,11 +119,16 @@ final class LocalVoiceModel: ObservableObject {
     @Published private(set) var preparing = false
     @Published private(set) var progress: Double = 0
     @Published private(set) var status = "首次使用需准备免费模型（约 3.3GB）"
+    private let session: URLSession
+    init(session: URLSession = .shared) { self.session = session }
     private var process: Process?
     private var serverStartup: Task<Void, Error>?
     private var preparation: Task<Void, Never>?
     private var residency: Task<Void, Never>?
     private var unloadTask: Task<Void, Never>?
+    private var stoppingServer: Task<Void, Never>?
+    private var retaining = false
+    private var resourceGeneration = UUID()
     static let version = "v0.40.6"
     static let runtimeHash = "b2b55434865a668decb494110d7fd970eed3ecc8837be2872f672ccbb95df974"
     static var root: URL {
@@ -136,7 +141,10 @@ final class LocalVoiceModel: ObservableObject {
         preparing = true
         preparation = Task { [weak self] in
             guard let self else { return }
-            defer { self.preparing = false; self.preparation = nil }
+            defer {
+                self.preparing = false; self.preparation = nil
+                if !self.retaining { self.unload() }
+            }
             do {
                 try await self.installRuntimeIfNeeded()
                 try await self.ensureServer()
@@ -150,7 +158,7 @@ final class LocalVoiceModel: ObservableObject {
                 request.timeoutInterval = 7200
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                 request.httpBody = try JSONSerialization.data(withJSONObject: ["model": LocalVoiceClient.model, "stream": true])
-                let (bytes, response) = try await URLSession.shared.bytes(for: request, delegate: VoiceNoRedirects())
+                let (bytes, response) = try await self.session.bytes(for: request, delegate: VoiceNoRedirects())
                 guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw VoiceModelError(message: "模型下载服务无法连接。") }
                 for try await line in bytes.lines {
                     try Task.checkCancellation()
@@ -173,17 +181,19 @@ final class LocalVoiceModel: ObservableObject {
         }
     }
 
+    /// Inspect installation files without starting an inference service.
     func refresh() async {
-        guard !preparing, FileManager.default.isExecutableFile(atPath: Self.runtime.appendingPathComponent("ollama").path) else { return }
-        do {
-            try await ensureServer()
-            ready = try await hasModel()
-            status = ready ? "TranslateGemma 4B 已就绪 · 本地免费" : "首次使用需下载 TranslateGemma 4B（约 3.3GB）"
-        } catch { status = "本地服务尚未就绪，可点击准备模型重试。" }
+        guard !preparing else { return }
+        let root = Self.root, runtime = Self.runtime
+        ready = await Task.detached(priority: .utility) {
+            VoiceModelInstallation.isComplete(root: root, runtime: runtime)
+        }.value
+        status = ready ? "TranslateGemma 4B 已安装 · 使用时启动" : "首次使用需准备免费模型（约 3.3GB）"
     }
 
     func cancelPreparation() { preparation?.cancel() }
     func shutdown() {
+        resourceGeneration = UUID(); retaining = false
         preparation?.cancel()
         residency?.cancel(); unloadTask?.cancel()
         serverStartup?.cancel()
@@ -199,12 +209,13 @@ final class LocalVoiceModel: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: ["model": LocalVoiceClient.model, "keep_alive": "10m", "stream": false,
                                                                         "options": ["num_ctx": 2048]])
-        let (_, response) = try await URLSession.shared.data(for: request, delegate: VoiceNoRedirects())
+        let (_, response) = try await self.session.data(for: request, delegate: VoiceNoRedirects())
         try Task.checkCancellation()
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw VoiceModelError(message: "本地翻译模型加载失败，请检查可用内存后重试。") }
     }
 
     func retainWhileListening() {
+        resourceGeneration = UUID(); retaining = true
         unloadTask?.cancel(); unloadTask = nil
         residency?.cancel()
         residency = Task { [weak self] in
@@ -215,24 +226,41 @@ final class LocalVoiceModel: ObservableObject {
             }
         }
     }
-    func unload() {
+    func unload(delayNanoseconds: UInt64 = 30_000_000_000) {
+        retaining = false
         residency?.cancel(); residency = nil
         unloadTask?.cancel()
-        unloadTask = Task {
-            do { try await Task.sleep(nanoseconds: 120_000_000_000) } catch { return }
-            guard !Task.isCancelled else { return }
-            var request = URLRequest(url: LocalVoiceClient.base.appendingPathComponent("api/generate"))
-            request.httpMethod = "POST"; request.timeoutInterval = 5
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try? JSONSerialization.data(withJSONObject: ["model": LocalVoiceClient.model, "keep_alive": 0])
-            _ = try? await URLSession.shared.data(for: request, delegate: VoiceNoRedirects())
+        let token = UUID(); resourceGeneration = token
+        unloadTask = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: delayNanoseconds) } catch { return }
+            guard !Task.isCancelled, let self, self.resourceGeneration == token, !self.retaining, !self.preparing else { return }
+            // Never launch a server merely to unload it.
+            if await self.serverAvailable() {
+                guard !Task.isCancelled, self.resourceGeneration == token else { return }
+                var request = URLRequest(url: LocalVoiceClient.base.appendingPathComponent("api/generate"))
+                request.httpMethod = "POST"; request.timeoutInterval = 5
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.httpBody = try? JSONSerialization.data(withJSONObject: ["model": LocalVoiceClient.model, "keep_alive": 0])
+                _ = try? await self.session.data(for: request, delegate: VoiceNoRedirects())
+            }
+            guard !Task.isCancelled, self.resourceGeneration == token, !self.retaining else { return }
+            if let service = self.process, service.isRunning {
+                self.process = nil
+                service.terminate()
+                self.stoppingServer = Task {
+                    for _ in 0..<40 where service.isRunning {
+                        do { try await Task.sleep(nanoseconds: 50_000_000) } catch { return }
+                    }
+                }
+            }
+            self.unloadTask = nil
         }
     }
 
     private func hasModel() async throws -> Bool {
         var request = URLRequest(url: LocalVoiceClient.base.appendingPathComponent("api/tags"))
         request.timeoutInterval = 3
-        let (data, response) = try await URLSession.shared.data(for: request, delegate: VoiceNoRedirects())
+        let (data, response) = try await self.session.data(for: request, delegate: VoiceNoRedirects())
         guard (response as? HTTPURLResponse)?.statusCode == 200,
               let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let models = object["models"] as? [[String: Any]] else { return false }
@@ -242,7 +270,7 @@ final class LocalVoiceModel: ObservableObject {
     private func serverAvailable() async -> Bool {
         var request = URLRequest(url: LocalVoiceClient.base.appendingPathComponent("api/version"))
         request.timeoutInterval = 1
-        guard let (data, response) = try? await URLSession.shared.data(for: request, delegate: VoiceNoRedirects()),
+        guard let (data, response) = try? await self.session.data(for: request, delegate: VoiceNoRedirects()),
               (response as? HTTPURLResponse)?.statusCode == 200,
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
         return object["version"] is String
@@ -257,6 +285,8 @@ final class LocalVoiceModel: ObservableObject {
     }
 
     private func launchServer() async throws {
+        if let stoppingServer { await stoppingServer.value; self.stoppingServer = nil }
+        try Task.checkCancellation()
         if await serverAvailable() { return }
         let executable = Self.runtime.appendingPathComponent("ollama")
         guard FileManager.default.isExecutableFile(atPath: executable.path) else { throw VoiceModelError(message: "本地推理组件未安装，请先准备模型。") }
@@ -287,7 +317,7 @@ final class LocalVoiceModel: ObservableObject {
         if FileManager.default.isExecutableFile(atPath: Self.runtime.appendingPathComponent("ollama").path) { return }
         status = "下载本地推理组件（约 175MB）…"
         let url = URL(string: "https://github.com/ollama/ollama/releases/download/\(Self.version)/ollama-darwin.tgz")!
-        let (download, response) = try await URLSession.shared.download(from: url)
+        let (download, response) = try await self.session.download(from: url)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw VoiceModelError(message: "推理组件下载失败，请检查网络。") }
         let hash = try await Task.detached {
             let file = try FileHandle(forReadingFrom: download)
@@ -312,5 +342,29 @@ final class LocalVoiceModel: ObservableObject {
         guard exit == 0 else { throw VoiceModelError(message: "本地推理组件解压失败。") }
         if FileManager.default.fileExists(atPath: Self.runtime.path) { try FileManager.default.removeItem(at: Self.runtime) }
         try FileManager.default.moveItem(at: staging, to: Self.runtime)
+    }
+}
+
+/// Small manifest and filesystem checks only; model weights are never read here.
+enum VoiceModelInstallation {
+    static func isComplete(root: URL, runtime: URL) -> Bool {
+        guard FileManager.default.isExecutableFile(atPath: runtime.appendingPathComponent("ollama").path) else { return false }
+        let models = root.appendingPathComponent("VoiceModels")
+        let manifest = models.appendingPathComponent("manifests/registry.ollama.ai/library/translategemma/4b")
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: manifest.path),
+              let size = attributes[.size] as? NSNumber, size.intValue < 65_536,
+              let data = try? Data(contentsOf: manifest),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let layers = object["layers"] as? [[String: Any]], !layers.isEmpty,
+              let config = object["config"] as? [String: Any] else { return false }
+        return (layers + [config]).allSatisfy { item in
+            guard let digest = item["digest"] as? String, digest.hasPrefix("sha256:"),
+                  let expected = item["size"] as? NSNumber, expected.int64Value >= 0 else { return false }
+            let hex = String(digest.dropFirst(7))
+            guard hex.count == 64, hex.allSatisfy({ $0.isHexDigit && $0.isASCII }) else { return false }
+            let blob = models.appendingPathComponent("blobs/sha256-" + hex)
+            guard let actual = try? FileManager.default.attributesOfItem(atPath: blob.path)[.size] as? NSNumber else { return false }
+            return actual.int64Value == expected.int64Value
+        }
     }
 }

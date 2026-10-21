@@ -44,7 +44,6 @@ final class VoiceTranslationStore: ObservableObject {
     @Published private(set) var liveOriginal = ""
     @Published private(set) var subtitleCaption: VoiceCaption?
     @Published private(set) var captions: [VoiceCaption] = []
-    @Published private(set) var level: Double = 0
     @Published private(set) var status = "点击开始，翻译麦克风里的声音。"
     @Published var error: String?
     @Published var shortcutError: String?
@@ -69,7 +68,6 @@ final class VoiceTranslationStore: ObservableObject {
     private let translateText: (String, TranslationLanguage, TranslationLanguage) async throws -> String
     private let modelReady: (() -> Bool)?
     private let streamTranslate: (@MainActor (String, TranslationLanguage, TranslationLanguage, @escaping @MainActor (String) -> Void) async throws -> String)?
-    private var lastLevelUpdate: TimeInterval = 0
 
     init(preferences: Preferences,
          archive: VoiceTranscriptArchive? = nil,
@@ -131,10 +129,6 @@ final class VoiceTranslationStore: ObservableObject {
                 try await recognition.start(language: source, onText: { [weak self] text, final in
                     guard let self, self.microphoneGeneration == token else { return }
                     self.receive(text, final: final)
-                }, onLevel: { [weak self] value in
-                    guard let self, self.microphoneGeneration == token else { return }
-                    let now = ProcessInfo.processInfo.systemUptime
-                    if now - self.lastLevelUpdate > 0.1 { self.level = value; self.lastLevelUpdate = now }
                 }, onStatus: { [weak self] text in
                     guard let self, self.microphoneGeneration == token else { return }
                     self.status = text + (self.modelLoading ? " · 翻译模型加载中" : "")
@@ -170,7 +164,7 @@ final class VoiceTranslationStore: ObservableObject {
         debounce?.cancel(); debounce = nil
         maximumWait?.cancel(); maximumWait = nil
         recognizer?.stop(); recognizer = nil
-        listening = false; starting = false; level = 0; liveOriginal = ""; modelLoading = false
+        listening = false; starting = false; liveOriginal = ""; modelLoading = false
         status = "麦克风已停止。"
         if cancelPending {
             translationGeneration = UUID()

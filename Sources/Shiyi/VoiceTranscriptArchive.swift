@@ -64,6 +64,9 @@ final class VoiceTranscriptArchive: ObservableObject {
     let directory: URL?
     private var active: [UUID: VoiceTranscriptSession] = [:]
     private var failedSessions: [UUID: String] = [:]
+    private var pendingSnapshots: [UUID: VoiceTranscriptSession] = [:]
+    private var saveTask: Task<Void, Never>?
+    private var writesInFlight = 0
     private let disk = DispatchQueue(label: "com.shiyi.voice.history", qos: .utility)
     static var defaultDirectory: URL {
         LocalVoiceModel.root.appendingPathComponent("VoiceHistory", isDirectory: true)
@@ -79,21 +82,46 @@ final class VoiceTranscriptArchive: ObservableObject {
     func record(_ caption: VoiceCaption, sessionID: UUID) {
         guard var session = active[sessionID] else { return }
         session.upsert(caption)
+        guard session != active[sessionID] else { return }
         active[sessionID] = session
-        persist(session)
+        persist(session, immediate: !caption.translation.isEmpty || caption.failure != nil)
     }
     func end(_ id: UUID) {
         guard var session = active[id] else { return }
         session.endedAt = session.endedAt ?? Date()
         active[id] = session
-        if !session.captions.isEmpty { persist(session) }
+        if !session.captions.isEmpty { persist(session, immediate: true) }
     }
-    private func persist(_ session: VoiceTranscriptSession) {
+    private func persist(_ session: VoiceTranscriptSession, immediate: Bool = false) {
         let summary = VoiceTranscriptSummary(session)
-        if let index = sessions.firstIndex(where: { $0.id == session.id }) { sessions[index] = summary }
-        else { sessions.append(summary); sessions.sort { $0.startedAt > $1.startedAt } }
+        if let index = sessions.firstIndex(where: { $0.id == session.id }) {
+            if sessions[index] != summary { sessions[index] = summary }
+        } else { sessions.append(summary); sessions.sort { $0.startedAt > $1.startedAt } }
+        guard directory != nil else { return }
+        pendingSnapshots[session.id] = session
+        updatePendingCount()
+        if immediate { writePending() }
+        else if saveTask == nil {
+            saveTask = Task { [weak self] in
+                do { try await Task.sleep(nanoseconds: 350_000_000) } catch { return }
+                self?.writePending()
+            }
+        }
+    }
+    private func updatePendingCount() {
+        let count = writesInFlight + pendingSnapshots.count
+        if pendingWrites != count { pendingWrites = count }
+    }
+    private func writePending() {
+        saveTask?.cancel(); saveTask = nil
+        let snapshots = Array(pendingSnapshots.values)
+        pendingSnapshots.removeAll()
+        writesInFlight += snapshots.count
+        updatePendingCount()
+        for session in snapshots { write(session) }
+    }
+    private func write(_ session: VoiceTranscriptSession) {
         guard let directory else { return }
-        pendingWrites += 1
         disk.async { [weak self] in
             let failure: String?
             do {
@@ -107,14 +135,15 @@ final class VoiceTranscriptArchive: ObservableObject {
             } catch { failure = "语音记录保存失败，请检查磁盘空间和文件夹权限；本次内容仍在内存中。" }
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                self.pendingWrites = max(0, self.pendingWrites - 1)
+                self.writesInFlight = max(0, self.writesInFlight - 1)
+                self.updatePendingCount()
                 if let failure { self.failedSessions[session.id] = failure }
                 else { self.failedSessions.removeValue(forKey: session.id) }
                 self.saveError = self.failedSessions.values.first
             }
         }
     }
-    func flush() { disk.sync {} }
+    func flush() { writePending(); disk.sync {} }
     func refresh() async {
         guard let directory else { return }
         let loaded = await withCheckedContinuation { continuation in
@@ -150,7 +179,7 @@ final class VoiceTranscriptArchive: ObservableObject {
         let clean = name.components(separatedBy: .newlines).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
         session.name = clean.isEmpty ? nil : String(clean.prefix(120))
         active[id] = session
-        persist(session)
+        persist(session, immediate: true)
     }
     func showFolder() {
         guard let directory else { return }

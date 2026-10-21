@@ -9,7 +9,7 @@ struct ShiyiApp: App {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
     private let store = AppStore()
     private lazy var monitor = SelectionMonitor(preferences: store.preferences)
     private lazy var overlay = OverlayWindowController(store: store)
@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let hotKey = GlobalHotKey()
     private var statusItem: NSStatusItem!
     private var controlWindow: NSWindow?
+    private var controlWindowOpen = false
     private var permissionTimer: Timer?
     private var localKeyMonitor: Any?
     private var observers = Set<AnyCancellable>()
@@ -71,14 +72,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.store.showOverlay()
             self?.store.captureFailed(message)
         }
-        copyShortcut.start()
-        store.preferences.$copyThenTranslate.dropFirst().sink { [weak self] enabled in
-            if !enabled { self?.copyShortcut.cancel() }
+        store.preferences.$copyThenTranslate.removeDuplicates().sink { [weak self] enabled in
+            if enabled { self?.copyShortcut.start() } else { self?.copyShortcut.stop() }
         }.store(in: &observers)
-        monitor.start()
-        store.$permissionGranted.removeDuplicates().dropFirst().sink { [weak self] _ in
-            self?.monitor.restart()
+        store.$phase.receive(on: DispatchQueue.main).sink { [weak self] phase in
+            guard let self, !self.controlWindowOpen, phase != .loading else { return }
+            self.controlWindow?.contentViewController = nil
         }.store(in: &observers)
+        monitor.trackApplications()
+        Publishers.CombineLatest4(store.$permissionGranted, store.$isOverlayVisible,
+                                  store.preferences.$autoTranslate, store.$isPreparingSystemLanguages)
+            .map { granted, visible, automatic, preparing in granted && visible && automatic && !preparing }
+            .removeDuplicates().receive(on: DispatchQueue.main).sink { [weak self] enabled in
+                if enabled { self?.monitor.start() } else { self?.monitor.stop() }
+            }.store(in: &observers)
+        store.$permissionGranted.removeDuplicates().receive(on: DispatchQueue.main).sink { [weak self] _ in
+            self?.updatePermissionChecks()
+        }.store(in: &observers)
+        NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in self?.store.refreshPermission(); self?.updatePermissionChecks() }.store(in: &observers)
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.keyCode == 53, self?.store.isOverlayExpanded == true {
                 self?.store.collapseOverlay()
@@ -99,10 +111,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         store.preferences.$overlayShortcut.dropFirst().receive(on: DispatchQueue.main).sink { [weak self] shortcut in
             self?.configureShortcut(shortcut)
         }.store(in: &observers)
-        permissionTimer = Timer(timeInterval: 1.5, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.store.refreshPermission() }
-        }
-        if let permissionTimer { RunLoop.main.add(permissionTimer, forMode: .common) }
         Publishers.MergeMany([
             store.preferences.$engine.map { _ in () }.eraseToAnyPublisher(),
             store.preferences.$source.map { _ in () }.eraseToAnyPublisher(),
@@ -117,6 +125,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }.store(in: &observers)
         showControlCenter()
     }
+
+    private func updatePermissionChecks() {
+        permissionTimer?.invalidate(); permissionTimer = nil
+        guard !store.permissionGranted, controlWindow?.isVisible == true else { return }
+        let timer = Timer(timeInterval: 3, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.store.refreshPermission()
+                if self.store.permissionGranted || self.controlWindow?.isVisible != true {
+                    self.permissionTimer?.invalidate(); self.permissionTimer = nil
+                }
+            }
+        }
+        timer.tolerance = 1
+        permissionTimer = timer; RunLoop.main.add(timer, forMode: .common)
+    }
+    func windowWillClose(_ notification: Notification) {
+        permissionTimer?.invalidate(); permissionTimer = nil
+        controlWindowOpen = false
+        if store.phase != .loading || store.isOverlayVisible { controlWindow?.contentViewController = nil }
+    }
+    func windowDidMiniaturize(_ notification: Notification) { permissionTimer?.invalidate(); permissionTimer = nil }
+    func windowDidDeminiaturize(_ notification: Notification) { updatePermissionChecks() }
 
     private func configureVoiceShortcut(_ shortcut: VoiceShortcut) {
         if revertingVoiceShortcut == shortcut { revertingVoiceShortcut = nil; return }
@@ -199,6 +230,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NotificationCenter.default.post(name: Notification.Name("ShiyiOpenVoice"), object: nil)
     }
     func applicationWillTerminate(_ notification: Notification) {
+        permissionTimer?.invalidate()
+        monitor.stop(); copyShortcut.stop()
         voiceStore.stop(cancelPending: true)
         voiceStore.archive.flush()
         voiceStore.model.shutdown()
@@ -217,14 +250,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             window.title = "拾译"
             window.titlebarAppearsTransparent = true
             window.isReleasedWhenClosed = false
+            window.delegate = self
             window.minSize = NSSize(width: 760, height: 620)
             window.contentViewController = NSHostingController(rootView: ControlCenterView(store: store, voiceStore: voiceStore))
             window.center()
             window.setFrameAutosaveName("ShiyiControlCenter")
             controlWindow = window
         }
+        if controlWindow?.contentViewController == nil {
+            controlWindow?.contentViewController = NSHostingController(rootView: ControlCenterView(store: store, voiceStore: voiceStore))
+        }
+        controlWindowOpen = true
         NSApp.activate(ignoringOtherApps: true)
         controlWindow?.makeKeyAndOrderFront(nil)
+        store.refreshPermission(); updatePermissionChecks()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }

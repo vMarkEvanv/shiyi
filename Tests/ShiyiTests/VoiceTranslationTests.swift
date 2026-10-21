@@ -29,7 +29,7 @@ private final class FakeVoiceRecognizer: VoiceRecognizing {
     var stopped = false
     var text: ((String, Bool) -> Void)?
     func start(language: TranslationLanguage, onText: @escaping (String, Bool) -> Void,
-               onLevel: @escaping (Double) -> Void, onStatus: @escaping (String) -> Void,
+               onStatus: @escaping (String) -> Void,
                onError: @escaping (String) -> Void) async throws { text = onText }
     func stop() { stopped = true }
 }

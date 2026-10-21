@@ -20,30 +20,33 @@ final class SelectionMonitor {
 
     init(preferences: Preferences) { self.preferences = preferences }
 
-    func start() {
-        guard monitors.isEmpty else { return }
-        rememberFrontApp()
+    /// Workspace activation is cheap and preserves manual capture from the menu.
+    /// Only prepare another app's accessibility tree while automatic capture is on.
+    func trackApplications() {
+        guard activationObserver == nil else { return }
+        rememberFrontApp(prepare: false)
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
-                self?.invalidate()
-                self?.lastSelection = nil
-                self?.rememberFrontApp()
+                guard let self else { return }
+                self.invalidate(); self.lastSelection = nil
+                self.rememberFrontApp(prepare: !self.monitors.isEmpty)
             }
         }
+    }
+    func start() {
+        guard monitors.isEmpty else { return }
+        trackApplications()
+        rememberFrontApp()
         if let monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp, .keyDown, .keyUp], handler: { [weak self] event in
             self?.handle(event)
         }) { monitors.append(monitor) }
     }
-
-    func restart() {
-        invalidate()
-        clearLastSelection()
+    func stop() {
+        invalidate(); clearLastSelection()
         for monitor in monitors { NSEvent.removeMonitor(monitor) }
         monitors.removeAll()
-        if let observer = activationObserver { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
-        activationObserver = nil
-        start()
     }
+    func restart() { stop(); start() }
 
     func invalidate() { generation = UUID(); pending?.cancel(); pending = nil }
     func clearLastSelection() { lastSelection = nil }
@@ -53,6 +56,7 @@ final class SelectionMonitor {
     }
 
     private func handle(_ event: NSEvent) {
+        guard preferences.autoTranslate, !(shouldSkipAutomatic?() ?? false) else { return }
         guard event.cgEvent?.getIntegerValueField(.eventSourceUserData) != ClipboardSelectionReader.eventTag else { return }
         switch event.type {
         case .leftMouseDown:
@@ -71,10 +75,10 @@ final class SelectionMonitor {
         }
     }
 
-    private func rememberFrontApp() {
+    private func rememberFrontApp(prepare: Bool = true) {
         if let app = NSWorkspace.shared.frontmostApplication, app.processIdentifier != ProcessInfo.processInfo.processIdentifier {
             lastExternalApp = app
-            browserAccessibility.prepare(app)
+            if prepare { browserAccessibility.prepare(app) }
         }
     }
 

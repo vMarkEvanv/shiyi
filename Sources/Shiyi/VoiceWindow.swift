@@ -83,6 +83,9 @@ final class NativeSubtitleSurface: NSView {
     private var forceReveal = true
     private var cachedFont = 0.0
     private var cachedWidth: CGFloat = 0
+    private var cachedCaptions: [VoiceCaption] = []
+    private var cachedBackground = -1.0
+    private var cachedHeight: CGFloat = 0
     private(set) var dragging = false
     var onDragEnded: (() -> Void)?
 
@@ -107,6 +110,7 @@ final class NativeSubtitleSurface: NSView {
     func reveal() { forceReveal = true }
 
     func update(captions: [VoiceCaption], fontSize: Double, width: CGFloat, backgroundOpacity: Double) -> CGFloat {
+        if !forceReveal, cachedFont == fontSize, cachedWidth == width, cachedBackground == backgroundOpacity, cachedCaptions == captions { return cachedHeight }
         let sourceFont = NSFont.systemFont(ofSize: max(13, fontSize * 0.75), weight: .medium)
         let targetFont = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
         let sourceHeight = ceil(sourceFont.ascender - sourceFont.descender + sourceFont.leading + 4)
@@ -169,7 +173,7 @@ final class NativeSubtitleSurface: NSView {
             }
             rows[caption.id] = row; snapshots[caption.id] = caption
         }
-        cachedFont = fontSize; cachedWidth = width; forceReveal = false
+        cachedFont = fontSize; cachedWidth = width; cachedCaptions = captions; cachedBackground = backgroundOpacity; cachedHeight = height; forceReveal = false
         setAccessibilityElement(true); setAccessibilityRole(.staticText)
         setAccessibilityLabel(visible.isEmpty ? "字幕窗口已打开，等待翻译" : visible.flatMap { [$0.original, $0.translation] }.joined(separator: "\n"))
         return height
@@ -246,8 +250,8 @@ final class VoiceWindowController: NSObject, NSWindowDelegate {
             store.preferences.$voiceSubtitleSize.map { _ in () }.eraseToAnyPublisher(),
             store.preferences.$voiceSubtitleOpacity.map { _ in () }.eraseToAnyPublisher(),
             store.preferences.$fadeEntireSubtitles.map { _ in () }.eraseToAnyPublisher(),
-            store.$captions.map { _ in () }.eraseToAnyPublisher(),
-            store.$subtitleCaption.map { _ in () }.eraseToAnyPublisher()
+            store.$captions.map { Array($0.filter { !$0.translation.isEmpty }.suffix(2)) }.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
+            store.$subtitleCaption.removeDuplicates().map { _ in () }.eraseToAnyPublisher()
         ]).receive(on: DispatchQueue.main).sink { [weak self] in self?.render() }.store(in: &observers)
     }
     private func render() {
@@ -381,7 +385,7 @@ struct VoiceSettingsView: View {
             DisclosureGroup("本地模型 · " + (model.ready ? "已就绪" : "需要准备"), isExpanded: $modelExpanded) {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Google TranslateGemma 4B · 本机运行，无 API 费用")
-                    Text("首次下载约 3.3GB 模型、175MB 推理组件和语音语言资源。音频与文字不发送到云端翻译服务。")
+                    Text("首次下载约 3.3GB 模型、175MB 推理组件和语音语言资源。只在使用时启动翻译服务，停止后约 30 秒释放模型并退出服务。再次开始可能需要重新加载。")
                         .font(.callout).foregroundStyle(ShiyiTheme.muted)
                     Text(model.status).font(.callout).textSelection(.enabled)
                     if model.preparing { ProgressView(value: model.progress) }
