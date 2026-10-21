@@ -174,10 +174,9 @@ final class VoiceTranslationStore: ObservableObject {
                 saveCaption(captions[index])
             }
             modelWarmTask?.cancel(); modelWarmTask = nil
-            if modelReady == nil { model.unload() }
         }
         if let sessionID { archive.end(sessionID) }
-        if worker == nil, modelReady == nil { model.unload() }
+        if worker == nil, modelReady == nil { model.unload(delayNanoseconds: cancelPending ? 0 : 30_000_000_000) }
     }
 
     func clear() {

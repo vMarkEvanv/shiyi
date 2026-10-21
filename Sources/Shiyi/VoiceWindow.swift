@@ -385,7 +385,7 @@ struct VoiceSettingsView: View {
             DisclosureGroup("本地模型 · " + (model.ready ? "已就绪" : "需要准备"), isExpanded: $modelExpanded) {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Google TranslateGemma 4B · 本机运行，无 API 费用")
-                    Text("首次下载约 3.3GB 模型、175MB 推理组件和语音语言资源。只在使用时启动翻译服务，停止后约 30 秒释放模型并退出服务。再次开始可能需要重新加载。")
+                    Text("首次下载约 3.3GB 模型、175MB 推理组件和语音语言资源。只在使用时启动翻译服务，关闭字幕立即停止收音、取消翻译并退出自有模型服务。再次开始可能需要重新加载。")
                         .font(.callout).foregroundStyle(ShiyiTheme.muted)
                     Text(model.status).font(.callout).textSelection(.enabled)
                     if model.preparing { ProgressView(value: model.progress) }

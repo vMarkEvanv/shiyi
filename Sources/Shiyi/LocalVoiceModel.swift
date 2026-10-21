@@ -231,6 +231,20 @@ final class LocalVoiceModel: ObservableObject {
         residency?.cancel(); residency = nil
         unloadTask?.cancel()
         let token = UUID(); resourceGeneration = token
+        if delayNanoseconds == 0 {
+            serverStartup?.cancel()
+            // Closing subtitles must not wait for an HTTP unload or an active inference.
+            if let service = process, service.isRunning {
+                process = nil
+                service.terminate()
+                stoppingServer = Task {
+                    for _ in 0..<40 where service.isRunning {
+                        do { try await Task.sleep(nanoseconds: 50_000_000) } catch { return }
+                    }
+                }
+                return
+            }
+        }
         unloadTask = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: delayNanoseconds) } catch { return }
             guard !Task.isCancelled, let self, self.resourceGeneration == token, !self.retaining, !self.preparing else { return }
@@ -287,7 +301,8 @@ final class LocalVoiceModel: ObservableObject {
     private func launchServer() async throws {
         if let stoppingServer { await stoppingServer.value; self.stoppingServer = nil }
         try Task.checkCancellation()
-        if await serverAvailable() { return }
+        if await serverAvailable() { try Task.checkCancellation(); return }
+        try Task.checkCancellation()
         let executable = Self.runtime.appendingPathComponent("ollama")
         guard FileManager.default.isExecutableFile(atPath: executable.path) else { throw VoiceModelError(message: "本地推理组件未安装，请先准备模型。") }
         let service = Process()
